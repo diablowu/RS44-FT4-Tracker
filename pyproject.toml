@@ -1,0 +1,21 @@
+[project]
+name = "rs44-ft4-tracker"
+version = "0.1.0"
+description = "RS44 (NORAD 44909) FT4 多普勒自动跟踪 - 通过 flrig XML-RPC 控制 IC-9700 Main/Sub"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "skyfield>=1.55",
+]
+
+[project.scripts]
+rs44-tracker = "rs44_ft4_tracker.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

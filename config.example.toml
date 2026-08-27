@@ -1,0 +1,44 @@
+# rs44-ft4-tracker 配置示例
+# 复制为 config.toml 后按需修改；未写的项使用内置默认值。
+# 必须设置的只有台站位置（[station]）。
+
+[station]
+# 台站位置（多普勒计算必需）：locator 与 latitude/longitude 二选一。
+# Maidenhead 网格，4/6/8 位均可，如 "OM00aw"（约为网格中心点）
+locator = "OM89fv"
+# 或者十进制度（北纬/东经为正），三行同时给出：
+# latitude = 30.9375
+# longitude = 100.0417
+# altitude_m = 500
+
+[flrig]
+# flrig XML-RPC 服务地址（flrig: Config → XmlRpc 里查看/设置）
+host = "127.0.0.1"
+port = 12345
+timeout_s = 5.0
+
+[satellite]
+name = "RS-44"
+norad_id = 44909            # RS-44 / DOSAAF-85
+tle_url = "https://celestrak.org/NORAD/elements/gp.php?CATNR=44909&FORMAT=TLE"
+# 完全离线时：把 TLE 文本存到文件并填路径（优先于网络下载）
+# tle_file = "/home/master/rs44.tle"
+tle_max_age_h = 12.0        # 缓存超过该小时数自动刷新；下载失败时回退用旧缓存
+
+[radio]
+# IC-9700 卫星模式默认频率/模式（可按需修改）
+downlink_mhz = 435.612      # Main 波段（接收）
+downlink_mode = "USB-D"     # 可用: LSB USB AM FM DV CW CW-R RTTY RTTY-R LSB-D USB-D AM-D FM-D DV-R
+uplink_mhz = 145.993        # Sub 波段（发射）
+uplink_mode = "LSB-D"
+set_mode_on_start = true    # 启动时把两个波段设到上面的模式
+# IC-9700 卫星模式约定 Main=下行、Sub=上行（flrig 里 VFO A=Main, VFO B=Sub）。
+# 如果你的接法相反（Main=上行），改为 "uplink"。
+main_band = "downlink"
+
+[tracking]
+interval_s = 1.0            # 校正周期（秒）。越小越平滑，CI-V 流量越大
+min_elevation_deg = 0.0     # 高于该高度角才算"过境"并校正；地平线下不动电台
+retune_threshold_hz = 10.0  # 频率变化小于该值不重调（减少通信；1 Hz 步进可用）
+correct_downlink = true     # 是否校正下行（Main）
+correct_uplink = true       # 是否校正上行（Sub）
