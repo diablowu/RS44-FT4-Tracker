@@ -112,8 +112,8 @@ class DopplerController:
         )
 
     def _apply(self, corr: Correction) -> None:
-        """把校正频率推送到电台（超过阈值才发送）。"""
-        if self.rig is None or not corr.in_pass:
+        """把校正频率推送到电台（无论卫星是否在地平线上都持续校正；超过阈值才发送）。"""
+        if self.rig is None:
             return
         threshold = self.cfg.tracking.retune_threshold_hz
         for band, freq in (("downlink", corr.downlink_hz), ("uplink", corr.uplink_hz)):
@@ -153,19 +153,18 @@ class DopplerController:
         return f"AOS {aos_dt:%m-%d %H:%M:%S}Z ({_fmt_secs(remain)} 后, 峰值 {self._next_aos.peak_el_deg:.0f}°)"
 
     def _status_line(self, corr: Correction) -> str:
+        """状态行：无论是否过境都显示多普勒偏移（Hz）与已下发的整 Hz 频率。"""
         utc = self.sat.now().utc_datetime()
         dl_shift, ul_shift = corr.shifts(self.cfg.radio.downlink_hz, self.cfg.radio.uplink_hz)
-        if corr.in_pass:
-            return (
-                f"{utc:%H:%M:%S}Z EL{corr.geo.alt_deg:+06.1f}° AZ{corr.geo.az_deg:05.1f}° "
-                f"RR{corr.geo.range_rate_km_s:+05.2f}km/s "
-                f"Δ↓{dl_shift:+07.0f}Hz Δ↑{ul_shift:+07.0f}Hz "
-                f"Main{corr.downlink_hz / 1e6:.6f} Sub{corr.uplink_hz / 1e6:.6f} [过境]"
-            )
-        return (
-            f"{utc:%H:%M:%S}Z EL{corr.geo.alt_deg:+06.1f}° (地平线下) "
-            f"下一圈 {self._fmt_aos()}"
+        base = (
+            f"{utc:%H:%M:%S}Z EL{corr.geo.alt_deg:+06.1f}° AZ{corr.geo.az_deg:05.1f}° "
+            f"RR{corr.geo.range_rate_km_s:+05.2f}km/s "
+            f"Δ↓{dl_shift:+07.0f}Hz Δ↑{ul_shift:+07.0f}Hz "
+            f"Main{corr.downlink_hz / 1e6:.6f} Sub{corr.uplink_hz / 1e6:.6f}"
         )
+        if corr.in_pass:
+            return base + " [过境]"
+        return base + f" [地平线下] 下一圈 {self._fmt_aos()}"
 
     # ------------------------------------------------------------------ 主循环
     def run(self, once: bool = False) -> None:

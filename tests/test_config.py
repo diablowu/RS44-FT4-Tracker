@@ -21,6 +21,7 @@ def test_defaults_match_rs44_ft4():
     assert cfg.satellite.norad_id == 44909
     assert cfg.flrig.host == "127.0.0.1" and cfg.flrig.port == 12345
     assert cfg.tracking.correct_downlink and cfg.tracking.correct_uplink
+    assert cfg.tracking.retune_threshold_hz == pytest.approx(1.0)  # IC-9700 1 Hz 步进
 
 
 def test_station_by_locator(tmp_path):

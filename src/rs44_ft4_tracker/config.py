@@ -90,7 +90,7 @@ class RadioConfig:
 class TrackingConfig:
     interval_s: float = 1.0
     min_elevation_deg: float = 0.0
-    retune_threshold_hz: float = 10.0  # 变化小于该值不重调，减少 CI-V 流量
+    retune_threshold_hz: float = 1.0  # IC-9700 支持 1 Hz 步进；变化小于该值不重调
     correct_downlink: bool = True
     correct_uplink: bool = True
 
