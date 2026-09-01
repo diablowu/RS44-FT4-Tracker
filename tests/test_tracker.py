@@ -13,7 +13,8 @@ from rs44_ft4_tracker.config import (
     TrackingConfig,
 )
 from rs44_ft4_tracker.doppler import Geometry
-from rs44_ft4_tracker.tracker import Correction, DopplerController
+from rs44_ft4_tracker.flrig import FlrigError
+from rs44_ft4_tracker.tracker import BACKOFF_INTERVAL_S, MAX_CONSECUTIVE_ERRORS, Correction, DopplerController
 
 
 class FakeRig:
@@ -22,6 +23,17 @@ class FakeRig:
 
     def set_frequency(self, vfo, freq_hz):
         self.calls.append((vfo, freq_hz))
+
+
+class FlakyRig:
+    """总是失败的假电台，用于测试连续出错后的退避逻辑。"""
+
+    def __init__(self):
+        self.attempts = 0
+
+    def set_frequency(self, vfo, freq_hz):
+        self.attempts += 1
+        raise FlrigError("模拟连接失败")
 
 
 def _make_controller(rig=None, **tracking_kw):
@@ -44,6 +56,9 @@ def _make_controller(rig=None, **tracking_kw):
     ctl._next_aos = None
     ctl._next_aos_checked = 0.0
     ctl._last_warn = 0.0
+    ctl._consecutive_errors = 0
+    ctl._link_down = False
+    ctl._last_attempt = 0.0
     return ctl
 
 
@@ -72,6 +87,35 @@ def test_apply_respects_threshold_regardless_of_pass():
     assert all(freq != 435612003 for _, freq in rig.calls)
     ctl._apply(_corr(in_pass=False, dl_hz=435612006))  # 累计变化 6Hz ≥ 阈值，重发
     assert ("A", 435612006) in rig.calls
+
+
+def test_apply_backs_off_after_repeated_failures():
+    """参考 gpredict 的错误计数策略：连续失败达到阈值后不再每周期重试。"""
+    rig = FlakyRig()
+    ctl = _make_controller(rig=rig, retune_threshold_hz=1.0)
+    for _ in range(MAX_CONSECUTIVE_ERRORS):
+        ctl._apply(_corr(in_pass=False))
+    assert ctl._link_down is True
+    assert rig.attempts == MAX_CONSECUTIVE_ERRORS * 2  # 下行+上行各失败一次
+
+    # 退避窗口内：即使频率继续变化，也不应再发起新的调用
+    ctl._apply(_corr(in_pass=False, dl_hz=435612999))
+    assert rig.attempts == MAX_CONSECUTIVE_ERRORS * 2
+
+    # 退避窗口过后，才会重新尝试
+    ctl._last_attempt -= BACKOFF_INTERVAL_S + 1.0
+    ctl._apply(_corr(in_pass=False, dl_hz=435612999))
+    assert rig.attempts == MAX_CONSECUTIVE_ERRORS * 2 + 2
+
+
+def test_apply_recovers_after_success():
+    rig = FakeRig()
+    ctl = _make_controller(rig=rig, retune_threshold_hz=1.0)
+    ctl._link_down = True
+    ctl._consecutive_errors = MAX_CONSECUTIVE_ERRORS
+    ctl._apply(_corr(in_pass=False))
+    assert ctl._link_down is False
+    assert ctl._consecutive_errors == 0
 
 
 def test_status_line_shows_shift_below_horizon(monkeypatch):

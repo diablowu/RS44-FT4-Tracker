@@ -21,6 +21,8 @@ from .flrig import FlrigClient, FlrigError
 
 WARN_INTERVAL_S = 30.0
 NEXT_AOS_RECHECK_S = 600.0
+MAX_CONSECUTIVE_ERRORS = 5   # 参考 gpredict：连续失败达到该次数后放慢重试节奏
+BACKOFF_INTERVAL_S = 10.0    # 电台判定离线后，每隔该秒数才重试一次（而非每周期都等超时）
 
 
 @dataclass
@@ -55,6 +57,9 @@ class DopplerController:
         self._next_aos: PassWindow | None = None
         self._next_aos_checked: float = 0.0
         self._last_warn: float = 0.0
+        self._consecutive_errors: int = 0
+        self._link_down: bool = False
+        self._last_attempt: float = 0.0
 
     # ------------------------------------------------------------------ 映射
     def _vfo(self, band: str) -> str:
@@ -112,10 +117,20 @@ class DopplerController:
         )
 
     def _apply(self, corr: Correction) -> None:
-        """把校正频率推送到电台（无论卫星是否在地平线上都持续校正；超过阈值才发送）。"""
+        """把校正频率推送到电台（无论卫星是否在地平线上都持续校正；超过阈值才发送）。
+
+        连续失败达到 MAX_CONSECUTIVE_ERRORS 次后判定电台离线：改为每
+        BACKOFF_INTERVAL_S 秒才重试一次，避免每个周期都卡在 flrig 的连接超时上
+        （否则地平线下的状态行也会跟着变卡）。参考 gpredict 的错误计数/重试策略。
+        """
         if self.rig is None:
             return
+        now = time.monotonic()
+        if self._link_down and now - self._last_attempt < BACKOFF_INTERVAL_S:
+            return
+        self._last_attempt = now
         threshold = self.cfg.tracking.retune_threshold_hz
+        ok = True
         for band, freq in (("downlink", corr.downlink_hz), ("uplink", corr.uplink_hz)):
             last = self._last_sent[band]
             if last is None or abs(freq - last) >= threshold:
@@ -123,7 +138,19 @@ class DopplerController:
                     self.rig.set_frequency(self._vfo(band), freq)
                     self._last_sent[band] = float(freq)
                 except FlrigError as exc:
+                    ok = False
                     self._warn(exc)
+        if ok:
+            if self._link_down:
+                print("\n[恢复] 电台连接已恢复")
+            self._link_down = False
+            self._consecutive_errors = 0
+        else:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS and not self._link_down:
+                self._link_down = True
+                print(f"\n[错误] 连续 {self._consecutive_errors} 次连接 flrig 失败，"
+                      f"电台可能离线；改为每 {BACKOFF_INTERVAL_S:g}s 重试一次")
 
     def _warn(self, exc: Exception) -> None:
         now = time.monotonic()
