@@ -105,6 +105,30 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    try:
+        cfg = _load_config(args)
+    except ConfigError as exc:
+        print(f"配置错误: {exc}")
+        print("请复制 config.example.toml 为 config.toml 并填写台站位置，或改用命令行参数。")
+        return 2
+
+    rig = None
+    if not args.dry_run:
+        rig = FlrigClient(cfg.flrig.host, cfg.flrig.port, cfg.flrig.timeout_s)
+
+    try:
+        controller = DopplerController(cfg, rig)
+    except TleError as exc:
+        print(f"TLE 错误: {exc}")
+        return 2
+
+    from .gui import run_gui  # 延迟导入：非 GUI 场景不必加载 tkinter
+
+    run_gui(controller, dry_run=args.dry_run)
+    return 0
+
+
 def cmd_passes(args: argparse.Namespace) -> int:
     try:
         cfg = _load_config(args)
@@ -166,6 +190,12 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--once", action="store_true", help="计算一次并打印报告后退出（不动电台）")
     _add_config_args(p_run)
     p_run.set_defaults(func=cmd_run)
+
+    p_gui = sub.add_parser("gui", help="打开图形界面（方位角/高度角极坐标图），不占用终端输出")
+    p_gui.add_argument("-c", "--config", default=None, help="配置文件路径（默认 ./config.toml）")
+    p_gui.add_argument("--dry-run", action="store_true", help="不连接 flrig，仅显示计算结果")
+    _add_config_args(p_gui)
+    p_gui.set_defaults(func=cmd_gui)
 
     p_pass = sub.add_parser("passes", help="列出未来过境窗口")
     p_pass.add_argument("-c", "--config", default=None, help="配置文件路径（默认 ./config.toml）")

@@ -237,6 +237,50 @@ def next_passes(
     return result
 
 
+def current_or_next_pass(
+    sat: Satellite,
+    station: GeographicPosition,
+    t0: Time,
+    min_elevation_deg: float = 0.0,
+    lookback_s: float = 1200.0,
+) -> PassWindow | None:
+    """返回正在进行中或即将开始的下一次过境。
+
+    往回多扫一段（默认 20 分钟）以捕捉 AOS 已经发生、此刻仍在过境中的窗口；
+    用于 GUI 实时把整段过境的方位角/高度角轨迹画出来。
+    """
+    start_epoch = t0.utc_datetime().timestamp() - lookback_s
+    start = t0.ts.utc(datetime.fromtimestamp(start_epoch, tz=timezone.utc))
+    hours = lookback_s / 3600.0 + 12.0
+    passes = next_passes(sat, station, start, hours=hours, min_elevation_deg=min_elevation_deg, max_count=5)
+    now_epoch = t0.utc_datetime().timestamp()
+    for p in passes:
+        if p.los.utc_datetime().timestamp() >= now_epoch:
+            return p
+    return None
+
+
+def azel_track(
+    sat: Satellite,
+    station: GeographicPosition,
+    t_start: Time,
+    t_end: Time,
+    steps: int = 90,
+) -> list[tuple[float, float]]:
+    """采样 [t_start, t_end] 之间的 (方位角, 高度角) 序列，用于极坐标图画出整段过境轨迹。"""
+    start_epoch = t_start.utc_datetime().timestamp()
+    end_epoch = t_end.utc_datetime().timestamp()
+    if end_epoch <= start_epoch:
+        return []
+    dts = [
+        datetime.fromtimestamp(start_epoch + (end_epoch - start_epoch) * i / steps, tz=timezone.utc)
+        for i in range(steps + 1)
+    ]
+    times = t_start.ts.utc(dts)
+    alt, az, _ = (sat.sat - station).at(times).altaz()
+    return list(zip(az.degrees, alt.degrees))
+
+
 def _make_window(
     ts: Timescale, samples: list[tuple[float, float]], coarse_step_s: float
 ) -> PassWindow:

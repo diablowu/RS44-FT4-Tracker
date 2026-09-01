@@ -10,6 +10,8 @@ from skyfield.api import EarthSatellite, load
 from rs44_ft4_tracker.doppler import (
     C_KM_S,
     Satellite,
+    azel_track,
+    current_or_next_pass,
     downlink_dial,
     geometry,
     make_station,
@@ -129,6 +131,56 @@ def test_to_local_same_instant_as_utc():
     local, tz = to_local(utc)
     assert local == utc  # 同一时刻
     assert tz  # 非空字符串
+
+
+def test_azel_track_samples_within_pass_window():
+    sat = _make_sat()
+    station = make_station(39.9042, 116.4074)
+    t0 = sat.ts.utc(2026, 8, 27, 0, 0, 0)
+    passes = next_passes(sat, station, t0, hours=24.0, min_elevation_deg=0.0, max_count=1)
+    assert passes
+    p = passes[0]
+    track = azel_track(sat, station, p.aos, p.los, steps=20)
+    assert len(track) == 21
+    for az, el in track:
+        assert 0.0 <= az < 360.0
+        assert -90.0 <= el <= 90.0
+    # 过境中点应接近峰值仰角附近（粗略上界检查，不要求精确匹配 max_el 采样点）
+    assert max(el for _az, el in track) <= p.peak_el_deg + 1.0
+
+
+def test_azel_track_empty_when_end_not_after_start():
+    sat = _make_sat()
+    station = make_station(39.9042, 116.4074)
+    t0 = sat.ts.utc(2026, 8, 27, 0, 0, 0)
+    assert azel_track(sat, station, t0, t0) == []
+
+
+def test_current_or_next_pass_finds_ongoing_pass():
+    sat = _make_sat()
+    station = make_station(39.9042, 116.4074)
+    t0 = sat.ts.utc(2026, 8, 27, 0, 0, 0)
+    passes = next_passes(sat, station, t0, hours=24.0, min_elevation_deg=0.0, max_count=1)
+    assert passes
+    p = passes[0]
+    mid_epoch = (p.aos.utc_datetime().timestamp() + p.los.utc_datetime().timestamp()) / 2.0
+    mid_t = sat.ts.utc(datetime.fromtimestamp(mid_epoch, tz=timezone.utc))
+
+    found = current_or_next_pass(sat, station, mid_t, min_elevation_deg=0.0)
+    assert found is not None
+    assert found.aos.utc_datetime().timestamp() == pytest.approx(p.aos.utc_datetime().timestamp())
+    assert found.los.utc_datetime().timestamp() == pytest.approx(p.los.utc_datetime().timestamp())
+
+
+def test_current_or_next_pass_returns_none_far_from_any_pass(monkeypatch):
+    import rs44_ft4_tracker.doppler as doppler_module
+
+    sat = _make_sat()
+    station = make_station(39.9042, 116.4074)
+    t0 = sat.ts.utc(2026, 8, 27, 0, 0, 0)
+
+    monkeypatch.setattr(doppler_module, "next_passes", lambda *a, **kw: [])
+    assert current_or_next_pass(sat, station, t0) is None
 
 
 def test_to_local_falls_back_to_utc_on_error(monkeypatch):

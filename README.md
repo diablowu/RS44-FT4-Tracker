@@ -78,17 +78,21 @@ uv run rs44-tracker run --interval 0.5
 
 # 指定其他配置文件
 uv run rs44-tracker run -c /path/to/config.toml
+
+# 图形界面：方位角/高度角极坐标图，不占用终端输出（见下面“图形界面”一节）
+uv run rs44-tracker gui
 ```
 
-也可以用仓库根目录下的一键启动脚本（自动 `uv sync` + 启动 `rs44-tracker run`，参数原样转发）：
+也可以用仓库根目录下的一键启动脚本（自动 `uv sync` + 在后台打开图形界面，参数原样转发，
+脚本本身立刻退出，不占用控制台）：
 
 ```bash
-./rs44-ft4.sh --dry-run --once      # Linux/macOS
+./rs44-ft4.sh --dry-run      # Linux/macOS
 ```
 
 ```powershell
-.\rs44-ft4.ps1 --dry-run --once     # Windows；若提示执行策略限制，先执行：
-                                     # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\rs44-ft4.ps1 --dry-run     # Windows；若提示执行策略限制，先执行：
+                              # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 `passes` 输出示例（时间自动按系统时区显示，示例为 CST=UTC+8；系统未设置时区时显示 UTC）：
@@ -111,6 +115,25 @@ RS-44 (NORAD 44909) 未来过境  台站 30.9375, 100.0417  最低高度 0°
 
 地平线下时同样持续校正并写入电台（多普勒偏移量随几何变化，退出/重入过境时不必等待
 频率追上），状态行改为显示下一圈 AOS 倒计时。
+
+## 图形界面
+
+```bash
+uv run rs44-tracker gui              # 实时跟踪并连接 flrig
+uv run rs44-tracker gui --dry-run    # 不连接电台，仅显示
+```
+
+`gui` 用 tkinter（标准库，无需额外依赖）打开一个窗口，启动后**不再往终端打印状态**，
+和 `run` 共用同一套配置文件/命令行参数。窗口内容参考 gpredict 的 Polar View：
+
+- 以地面站为圆心的方位角/高度角极坐标图：正北在上、方位角顺时针增大；圆心=天顶
+  （El 90°），最外圈=地平线（El 0°），中间两圈是 El 60°/30°；
+- 卫星进入过境窗口后，把整段过境（AOS→LOS）的方位角/高度角轨迹画成一条曲线，
+  再用一个红点标出卫星当前位置（随刷新周期移动，地平线下时红点隐藏）；
+- 右侧面板显示时间、方位角/高度角、斜距、径向速度、下行/上行多普勒偏移、
+  Main/Sub 调谐频率、过境状态、电台连接状态。
+
+关闭窗口即结束跟踪；命令行参数解析、退避重连等逻辑与 `run` 完全一致。
 
 ## 开发
 
@@ -135,7 +158,8 @@ uv run python tools/civ_sim.py   # 打印分配到的从端路径，如 /dev/pts
 | `src/rs44_ft4_tracker/doppler.py` | TLE 获取/缓存、卫星几何、多普勒公式、过境预测 |
 | `src/rs44_ft4_tracker/flrig.py` | flrig XML-RPC 客户端（VFO A=Main / B=Sub） |
 | `src/rs44_ft4_tracker/tracker.py` | 主循环：AOS/LOS、阈值重调、状态显示 |
-| `src/rs44_ft4_tracker/cli.py` | 命令行入口 |
+| `src/rs44_ft4_tracker/gui.py` | tkinter 图形界面（方位角/高度角极坐标图） |
+| `src/rs44_ft4_tracker/cli.py` | 命令行入口（`run`/`gui`/`passes`） |
 
 ## 注意事项
 
