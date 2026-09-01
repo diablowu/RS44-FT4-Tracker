@@ -98,6 +98,14 @@ RS-44 (NORAD 44909) 未来过境  台站 30.9375, 100.0417  最低高度 0°
 uv run pytest       # 单元测试（网格换算、多普勒符号约定、mock flrig 服务端等）
 ```
 
+`tools/civ_sim.py` 是一个 IC-9700 CI-V 协议模拟器（伪终端），可在没有真实电台的情况下
+用真实 flrig 二进制做端到端调试：
+
+```bash
+uv run python tools/civ_sim.py   # 打印分配到的从端路径，如 /dev/pts/5
+# 把该路径填入 flrig 的 IC-9700.prefs -> xcvr_serial_port，选 IC-9700 后启动 flrig
+```
+
 源码结构：
 
 | 文件 | 职责 |
