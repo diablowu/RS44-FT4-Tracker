@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import AppConfig, ConfigError
-from .doppler import Satellite, TleError, load_tle, make_station, next_passes
+from .doppler import Satellite, TleError, load_tle, make_station, next_passes, to_local
 from .flrig import FlrigClient, FlrigError
 from .tracker import DopplerController
 
@@ -91,15 +91,19 @@ def cmd_passes(args: argparse.Namespace) -> int:
         print(f"未来 {args.hours:g} 小时内没有满足条件的过境（EL≥{min_el:g}°）")
         return 0
 
+    _, tz = to_local(sat.now().utc_datetime())
     print(f"{cfg.satellite.name} (NORAD {cfg.satellite.norad_id}) 未来过境  "
-          f"台站 {lat:.4f}, {lon:.4f}  最低高度 {min_el:g}°  时间均为 UTC")
+          f"台站 {lat:.4f}, {lon:.4f}  最低高度 {min_el:g}°  时间均为 {tz}")
     print(f"{'#':>2}  {'AOS':<17}{'LOS':<17}{'峰值时刻':<17}{'峰值EL':>7}{'时长':>9}")
     for i, p in enumerate(passes, 1):
         dur = (p.los.utc_datetime().timestamp() - p.aos.utc_datetime().timestamp())
         m, s = divmod(int(dur), 60)
-        print(f"{i:>2}  {p.aos.utc_datetime():%m-%d %H:%M:%S}   "
-              f"{p.los.utc_datetime():%m-%d %H:%M:%S}   "
-              f"{p.max_el.utc_datetime():%m-%d %H:%M:%S}   "
+        aos_local, _ = to_local(p.aos.utc_datetime())
+        los_local, _ = to_local(p.los.utc_datetime())
+        peak_local, _ = to_local(p.max_el.utc_datetime())
+        print(f"{i:>2}  {aos_local:%m-%d %H:%M:%S}   "
+              f"{los_local:%m-%d %H:%M:%S}   "
+              f"{peak_local:%m-%d %H:%M:%S}   "
               f"{p.peak_el_deg:>6.1f}°{m:>6d}m{s:02d}s")
     return 0
 

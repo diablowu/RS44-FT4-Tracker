@@ -15,6 +15,7 @@ from .doppler import (
     load_tle,
     make_station,
     next_passes,
+    to_local,
     uplink_dial,
 )
 from .flrig import FlrigClient, FlrigError
@@ -177,14 +178,15 @@ class DopplerController:
             return "12 小时内无过境"
         aos_dt = self._next_aos.aos.utc_datetime()
         remain = aos_dt.timestamp() - time.time()
-        return f"AOS {aos_dt:%m-%d %H:%M:%S}Z ({_fmt_secs(remain)} 后, 峰值 {self._next_aos.peak_el_deg:.0f}°)"
+        local_aos, tz = to_local(aos_dt)
+        return f"AOS {local_aos:%m-%d %H:%M:%S} {tz} ({_fmt_secs(remain)} 后, 峰值 {self._next_aos.peak_el_deg:.0f}°)"
 
     def _status_line(self, corr: Correction) -> str:
         """状态行：无论是否过境都显示多普勒偏移（Hz）与已下发的整 Hz 频率。"""
-        utc = self.sat.now().utc_datetime()
+        local_dt, tz = to_local(self.sat.now().utc_datetime())
         dl_shift, ul_shift = corr.shifts(self.cfg.radio.downlink_hz, self.cfg.radio.uplink_hz)
         base = (
-            f"{utc:%H:%M:%S}Z EL{corr.geo.alt_deg:+06.1f}° AZ{corr.geo.az_deg:05.1f}° "
+            f"{local_dt:%H:%M:%S} {tz} EL{corr.geo.alt_deg:+06.1f}° AZ{corr.geo.az_deg:05.1f}° "
             f"RR{corr.geo.range_rate_km_s:+05.2f}km/s "
             f"Δ↓{dl_shift:+07.0f}Hz Δ↑{ul_shift:+07.0f}Hz "
             f"Main{corr.downlink_hz / 1e6:.6f} Sub{corr.uplink_hz / 1e6:.6f}"
@@ -202,8 +204,9 @@ class DopplerController:
             while True:
                 corr = self.compute()
                 if self._in_pass is not None and corr.in_pass != self._in_pass:
+                    local_dt, tz = to_local(self.sat.now().utc_datetime())
                     print(f"\n[{'AOS' if corr.in_pass else 'LOS'}] "
-                          f"{self.sat.now().utc_datetime():%H:%M:%S}Z "
+                          f"{local_dt:%H:%M:%S} {tz} "
                           f"EL{corr.geo.alt_deg:+.1f}°")
                     if not corr.in_pass:
                         self._last_sent = {"downlink": None, "uplink": None}
@@ -222,6 +225,7 @@ class DopplerController:
     def _print_header(self) -> None:
         epoch = self.sat.sat.epoch.utc_datetime()
         age_d = (self.sat.now().utc_datetime() - epoch).total_seconds() / 86400.0
+        local_epoch, tz = to_local(epoch)
         lat, lon, alt = self.cfg.station.geodetic()
         mode = "DRY-RUN" if self.rig is None else "LIVE"
         print(
@@ -229,7 +233,7 @@ class DopplerController:
             f"(NORAD {self.cfg.satellite.norad_id})\n"
             f"台站 {lat:.4f}°{'N' if lat >= 0 else 'S'} {abs(lon):.4f}°"
             f"{'E' if lon >= 0 else 'W'} 海拔 {alt:.0f} m   "
-            f"TLE 历元 {epoch:%Y-%m-%d %H:%M}Z ({age_d:.1f} 天前)\n"
+            f"TLE 历元 {local_epoch:%Y-%m-%d %H:%M} {tz} ({age_d:.1f} 天前)\n"
             f"下行 {self.cfg.radio.downlink_mhz:.6f} MHz {self.cfg.radio.downlink_mode} → Main(A)   "
             f"上行 {self.cfg.radio.uplink_mhz:.6f} MHz {self.cfg.radio.uplink_mode} → Sub(B)   "
             f"周期 {self.cfg.tracking.interval_s:g}s 阈值 {self.cfg.tracking.retune_threshold_hz:g}Hz"
@@ -237,14 +241,14 @@ class DopplerController:
 
     def report(self, corr: Correction) -> str:
         dl_shift, ul_shift = corr.shifts(self.cfg.radio.downlink_hz, self.cfg.radio.uplink_hz)
-        utc = self.sat.now().utc_datetime()
+        local_dt, tz = to_local(self.sat.now().utc_datetime())
         state = (
             f"过境中（EL≥{self.cfg.tracking.min_elevation_deg:g}°）"
             if corr.in_pass
             else f"地平线下，下一圈 {self._fmt_aos()}"
         )
         return (
-            f"\n时刻   {utc:%Y-%m-%d %H:%M:%S} UTC\n"
+            f"\n时刻   {local_dt:%Y-%m-%d %H:%M:%S} {tz}\n"
             f"几何   高度 {corr.geo.alt_deg:+.2f}°  方位 {corr.geo.az_deg:.2f}°  "
             f"斜距 {corr.geo.range_km:.1f} km  径向速度 {corr.geo.range_rate_km_s:+.3f} km/s\n"
             f"下行   {self.cfg.radio.downlink_mhz:.6f} MHz {self.cfg.radio.downlink_mode}"

@@ -16,6 +16,7 @@ from rs44_ft4_tracker.doppler import (
     next_passes,
     parse_tles,
     tle_sat_number,
+    to_local,
     uplink_dial,
 )
 
@@ -120,3 +121,26 @@ def test_next_passes_finds_windows():
     # 时间递增
     aos_list = [p.aos.utc_datetime() for p in passes]
     assert aos_list == sorted(aos_list)
+
+
+def test_to_local_same_instant_as_utc():
+    """本地时区转换不改变绝对时刻，只改变显示。"""
+    utc = datetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc)
+    local, tz = to_local(utc)
+    assert local == utc  # 同一时刻
+    assert tz  # 非空字符串
+
+
+def test_to_local_falls_back_to_utc_on_error(monkeypatch):
+    """系统时区不可用时（astimezone 抛错）退化为 UTC，而不是崩溃。"""
+
+    class BadDatetime(datetime):
+        def astimezone(self, tz=None):
+            if tz is None:
+                raise OSError("no system timezone")
+            return super().astimezone(tz)
+
+    utc = BadDatetime(2026, 8, 27, 12, 0, 0, tzinfo=timezone.utc)
+    local, tz = to_local(utc)
+    assert local == utc
+    assert tz == "UTC"

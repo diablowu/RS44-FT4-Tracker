@@ -28,6 +28,19 @@ class TleError(RuntimeError):
     """TLE 获取/解析失败。"""
 
 
+# ---------------------------------------------------------------------- 时区
+def to_local(dt: datetime) -> tuple[datetime, str]:
+    """把 UTC 时间转换为系统本地时区显示；系统未配置时区（或转换失败）时退化为 UTC。
+
+    返回 (本地时间, 时区简称)，简称取系统 tzname()，取不到则用 "UTC"。
+    """
+    try:
+        local = dt.astimezone()
+    except (OSError, ValueError):
+        local = dt.astimezone(timezone.utc)
+    return local, local.tzname() or "UTC"
+
+
 # ---------------------------------------------------------------------- 多普勒
 def downlink_dial(freq_hz: float, range_rate_km_s: float) -> float:
     """给定卫星径向速度，返回下行接收应调谐的频率 (Hz)。"""
