@@ -13,6 +13,50 @@ from .flrig import FlrigClient, FlrigError
 from .tracker import DopplerController
 
 
+def _add_config_args(p: argparse.ArgumentParser) -> None:
+    """所有配置文件字段对应的命令行参数：不填则用配置文件/内置默认值，填了则覆盖。"""
+    g_station = p.add_argument_group("台站位置 [station]")
+    g_station.add_argument("--locator", default=None, help="Maidenhead 网格坐标，如 OM00aw")
+    g_station.add_argument("--latitude", type=float, default=None, help="纬度（十进制度，北正）")
+    g_station.add_argument("--longitude", type=float, default=None, help="经度（十进制度，东正）")
+    g_station.add_argument("--altitude-m", type=float, default=None, dest="altitude_m", help="海拔（米）")
+
+    g_flrig = p.add_argument_group("flrig [flrig]")
+    g_flrig.add_argument("--flrig-host", default=None, dest="host", help="flrig XML-RPC 地址")
+    g_flrig.add_argument("--flrig-port", type=int, default=None, dest="port", help="flrig XML-RPC 端口")
+    g_flrig.add_argument("--flrig-timeout", type=float, default=None, dest="timeout_s",
+                          help="flrig 调用超时（秒）")
+
+    g_sat = p.add_argument_group("卫星 [satellite]")
+    g_sat.add_argument("--sat-name", default=None, dest="name", help="卫星名称")
+    g_sat.add_argument("--norad-id", type=int, default=None, help="NORAD 编号")
+    g_sat.add_argument("--tle-url", default=None, help="TLE 下载地址")
+    g_sat.add_argument("--tle-file", default=None, help="本地 TLE 文件路径（优先于网络下载）")
+    g_sat.add_argument("--tle-max-age", type=float, default=None, dest="tle_max_age_h",
+                        help="TLE 缓存有效期（小时）")
+
+    g_radio = p.add_argument_group("电台 [radio]")
+    g_radio.add_argument("--downlink-mhz", type=float, default=None, help="下行标称频率（MHz）")
+    g_radio.add_argument("--downlink-mode", default=None, help="下行模式，如 USB-D")
+    g_radio.add_argument("--uplink-mhz", type=float, default=None, help="上行标称频率（MHz）")
+    g_radio.add_argument("--uplink-mode", default=None, help="上行模式，如 LSB-D")
+    g_radio.add_argument("--main-band", choices=("downlink", "uplink"), default=None,
+                          help="Main(VFO A) 对应哪条链路")
+    g_radio.add_argument("--set-mode-on-start", action=argparse.BooleanOptionalAction, default=None,
+                          help="启动时是否下发 Main/Sub 模式")
+
+    g_track = p.add_argument_group("跟踪 [tracking]")
+    g_track.add_argument("--interval", type=float, default=None, dest="interval_s", help="校正周期（秒）")
+    g_track.add_argument("--min-elevation", type=float, default=None, dest="min_elevation_deg",
+                          help="过境判定的最低高度角（度）")
+    g_track.add_argument("--retune-threshold", type=float, default=None, dest="retune_threshold_hz",
+                          help="重调阈值（Hz）")
+    g_track.add_argument("--correct-downlink", action=argparse.BooleanOptionalAction, default=None,
+                          help="是否校正下行")
+    g_track.add_argument("--correct-uplink", action=argparse.BooleanOptionalAction, default=None,
+                          help="是否校正上行")
+
+
 def _resolve_config(path: str | None) -> str | None:
     if path:
         return path
@@ -21,26 +65,25 @@ def _resolve_config(path: str | None) -> str | None:
     return None
 
 
-def _load_config(path: str | None) -> AppConfig:
-    resolved = _resolve_config(path)
+def _load_config(args: argparse.Namespace) -> AppConfig:
+    resolved = _resolve_config(args.config)
     cfg = AppConfig.load(resolved)
     if resolved is None:
         print("[提示] 未找到 config.toml，使用内置默认值（台站位置必须在配置中设置）")
-    cfg.station.geodetic()  # 提前触发台站位置校验，给出行清晰的错误信息
+    overridable = AppConfig.override_fields()
+    overrides = {k: v for k, v in vars(args).items() if k in overridable and v is not None}
+    if overrides:
+        cfg = cfg.override(**overrides)
+    cfg.station.geodetic()  # 提前触发台站位置校验，给出清晰的错误信息
     return cfg
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     try:
-        cfg = _load_config(args.config)
-        if args.interval is not None:
-            if args.interval <= 0:
-                print("错误: --interval 必须为正数")
-                return 2
-            cfg = cfg.with_overrides(interval_s=args.interval)
+        cfg = _load_config(args)
     except ConfigError as exc:
         print(f"配置错误: {exc}")
-        print("请复制 config.example.toml 为 config.toml 并填写台站位置。")
+        print("请复制 config.example.toml 为 config.toml 并填写台站位置，或改用命令行参数。")
         return 2
 
     rig = None
@@ -64,10 +107,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_passes(args: argparse.Namespace) -> int:
     try:
-        cfg = _load_config(args.config)
+        cfg = _load_config(args)
     except ConfigError as exc:
         print(f"配置错误: {exc}")
-        print("请复制 config.example.toml 为 config.toml 并填写台站位置。")
+        print("请复制 config.example.toml 为 config.toml 并填写台站位置，或改用命令行参数。")
         return 2
 
     try:
@@ -82,7 +125,7 @@ def cmd_passes(args: argparse.Namespace) -> int:
 
     lat, lon, alt = cfg.station.geodetic()
     station = make_station(lat, lon, alt)
-    min_el = args.min_elevation if args.min_elevation is not None else cfg.tracking.min_elevation_deg
+    min_el = cfg.tracking.min_elevation_deg
     passes = next_passes(
         sat, station, sat.now(), hours=args.hours, min_elevation_deg=min_el,
         max_count=args.count,
@@ -121,15 +164,14 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("-c", "--config", default=None, help="配置文件路径（默认 ./config.toml）")
     p_run.add_argument("--dry-run", action="store_true", help="不连接 flrig，仅显示计算结果")
     p_run.add_argument("--once", action="store_true", help="计算一次并打印报告后退出（不动电台）")
-    p_run.add_argument("--interval", type=float, default=None, help="覆盖校正周期（秒）")
+    _add_config_args(p_run)
     p_run.set_defaults(func=cmd_run)
 
     p_pass = sub.add_parser("passes", help="列出未来过境窗口")
     p_pass.add_argument("-c", "--config", default=None, help="配置文件路径（默认 ./config.toml）")
     p_pass.add_argument("--hours", type=float, default=24.0, help="扫描未来小时数（默认 24）")
     p_pass.add_argument("--count", type=int, default=8, help="最多显示几个过境（默认 8）")
-    p_pass.add_argument("--min-elevation", type=float, default=None,
-                        help="最低高度角（度，默认取配置 min_elevation_deg）")
+    _add_config_args(p_pass)
     p_pass.set_defaults(func=cmd_passes)
 
     args = parser.parse_args(argv_list)

@@ -71,5 +71,27 @@ def test_bad_main_band(tmp_path):
 
 
 def test_main_band_mapping():
-    cfg = AppConfig.load(None).with_overrides(interval_s=2.0)
+    cfg = AppConfig.load(None).override(interval_s=2.0)
     assert cfg.tracking.interval_s == 2.0
+
+
+def test_override_crosses_multiple_sections():
+    cfg = AppConfig.load(None).override(
+        latitude=1.0, longitude=2.0, host="10.0.0.1", downlink_mhz=145.9, interval_s=2.0
+    )
+    assert (cfg.station.latitude, cfg.station.longitude) == (1.0, 2.0)
+    assert cfg.flrig.host == "10.0.0.1"
+    assert cfg.radio.downlink_mhz == pytest.approx(145.9)
+    assert cfg.tracking.interval_s == pytest.approx(2.0)
+    # 未覆盖的字段保持原值
+    assert cfg.radio.uplink_mhz == pytest.approx(145.993)
+
+
+def test_override_unknown_field_raises():
+    with pytest.raises(ConfigError, match="未知配置项"):
+        AppConfig.load(None).override(not_a_real_field=1)
+
+
+def test_override_reruns_radio_validation():
+    with pytest.raises(ConfigError):
+        AppConfig.load(None).override(main_band="middle")

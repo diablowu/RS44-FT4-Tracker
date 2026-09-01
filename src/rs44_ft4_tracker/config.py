@@ -94,6 +94,21 @@ class TrackingConfig:
     correct_downlink: bool = True
     correct_uplink: bool = True
 
+    def __post_init__(self) -> None:
+        if self.interval_s <= 0:
+            raise ConfigError("tracking.interval_s 必须为正数")
+        if self.retune_threshold_hz < 0:
+            raise ConfigError("tracking.retune_threshold_hz 不能为负数")
+
+
+_SECTION_TYPES = {
+    "station": StationConfig,
+    "flrig": FlrigConfig,
+    "satellite": SatelliteConfig,
+    "radio": RadioConfig,
+    "tracking": TrackingConfig,
+}
+
 
 @dataclass
 class AppConfig:
@@ -154,13 +169,34 @@ class AppConfig:
             ),
         )
 
-    def with_overrides(self, **kw) -> "AppConfig":
-        """返回替换了 tracking 子项的新配置。"""
-        tracking = replace(self.tracking, **kw)
-        return AppConfig(
-            station=self.station,
-            flrig=self.flrig,
-            satellite=self.satellite,
-            radio=self.radio,
-            tracking=tracking,
-        )
+    @staticmethod
+    def override_fields() -> dict[str, str]:
+        """所有可覆盖字段名 -> 所属 section 名（用于命令行参数按字段名覆盖配置）。"""
+        mapping: dict[str, str] = {}
+        for section_name, dc in _SECTION_TYPES.items():
+            for f in fields(dc):
+                mapping[f.name] = section_name
+        return mapping
+
+    def override(self, **kwargs) -> "AppConfig":
+        """按字段名覆盖任意 section 的配置项（跨 station/flrig/satellite/radio/tracking
+        自动定位所属 section）。调用方应先过滤掉未提供（None）的项再传入。
+        """
+        owner = self.override_fields()
+        by_section: dict[str, dict] = {name: {} for name in _SECTION_TYPES}
+        for key, val in kwargs.items():
+            if key not in owner:
+                raise ConfigError(f"未知配置项: {key}")
+            by_section[owner[key]][key] = val
+
+        sections = {
+            "station": self.station,
+            "flrig": self.flrig,
+            "satellite": self.satellite,
+            "radio": self.radio,
+            "tracking": self.tracking,
+        }
+        for name, updates in by_section.items():
+            if updates:
+                sections[name] = replace(sections[name], **updates)
+        return AppConfig(**sections)

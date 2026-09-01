@@ -49,6 +49,15 @@ cp config.example.toml config.toml
 必填项只有台站位置（`[station]` 的 `locator` 或经纬度）。其余保持默认即可。
 所有选项见 `config.example.toml` 内注释。
 
+配置文件里的每一项也都有对应的命令行参数（`run`/`passes` 均支持，`uv run rs44-tracker run -h`
+查看完整列表），命令行传了就覆盖配置文件/内置默认值，没传就保持原样——可以完全不用配置
+文件，只用命令行跑：
+
+```bash
+uv run rs44-tracker run --dry-run --once --latitude 30.9375 --longitude 100.0417 \
+    --downlink-mhz 435.612 --uplink-mhz 145.993
+```
+
 ## 使用
 
 ```bash
