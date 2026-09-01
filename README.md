@@ -80,6 +80,17 @@ uv run rs44-tracker run --interval 0.5
 uv run rs44-tracker run -c /path/to/config.toml
 ```
 
+也可以用仓库根目录下的一键启动脚本（自动 `uv sync` + 启动 `rs44-tracker run`，参数原样转发）：
+
+```bash
+./rs44-ft4.sh --dry-run --once      # Linux/macOS
+```
+
+```powershell
+.\rs44-ft4.ps1 --dry-run --once     # Windows；若提示执行策略限制，先执行：
+                                     # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
 `passes` 输出示例（时间自动按系统时区显示，示例为 CST=UTC+8；系统未设置时区时显示 UTC）：
 
 ```
