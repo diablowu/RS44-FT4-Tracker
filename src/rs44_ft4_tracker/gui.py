@@ -15,14 +15,17 @@ from .doppler import PassWindow, azel_track, current_or_next_pass, to_local
 from .flrig import FlrigError
 from .tracker import Correction, DopplerController
 
-_BG = "#04121f"
-_GRID = "#1c3549"
-_GRID_MINOR = "#122536"
-_RING_LABEL = "#5f87a3"
-_COMPASS = "#c9d8e3"
-_TRACK = "#e08b2c"
-_MARKER = "#ff4d4d"
-_ZENITH = "#5f87a3"
+_BG = "#f5f7f9"
+_GRID = "#8fa3b3"
+_GRID_MINOR = "#d3dce2"
+_RING_LABEL = "#4a6478"
+_COMPASS = "#1b2b3a"
+_TRACK = "#c1670a"
+_MARKER = "#d63229"
+_MARKER_OUTLINE = "#5a0f0f"
+_ZENITH = "#4a6478"
+_LABEL_FG = "#33475b"
+_VALUE_FG = "#0c1620"
 
 _PAD = 30
 _RINGS = (60.0, 30.0, 0.0)  # 圆心即 El 90°，不用单独画
@@ -91,7 +94,7 @@ class PolarView(tk.Canvas):
             return
         x, y = self._polar_to_xy(az_deg, el_deg)
         r = 5
-        self._marker = self.create_oval(x - r, y - r, x + r, y + r, fill=_MARKER, outline="#ffffff")
+        self._marker = self.create_oval(x - r, y - r, x + r, y + r, fill=_MARKER, outline=_MARKER_OUTLINE)
 
 
 _FIELDS = (
@@ -132,9 +135,9 @@ class TrackerApp:
 
         self.vars: dict[str, tk.StringVar] = {key: tk.StringVar(value="—") for key, _ in _FIELDS}
         for row, (key, label) in enumerate(_FIELDS):
-            tk.Label(info, text=f"{label}：", background=_BG, foreground=_COMPASS,
+            tk.Label(info, text=f"{label}：", background=_BG, foreground=_LABEL_FG,
                      font=("TkDefaultFont", 10)).grid(row=row, column=0, sticky="w", pady=2)
-            tk.Label(info, textvariable=self.vars[key], background=_BG, foreground="#ffffff",
+            tk.Label(info, textvariable=self.vars[key], background=_BG, foreground=_VALUE_FG,
                      font=("TkDefaultFont", 10, "bold")).grid(row=row, column=1, sticky="w", padx=(6, 0))
 
     # ------------------------------------------------------------------ 启动
