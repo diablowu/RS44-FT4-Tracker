@@ -44,6 +44,9 @@ def _add_config_args(p: argparse.ArgumentParser) -> None:
                           help="Main(VFO A) 对应哪条链路")
     g_radio.add_argument("--set-mode-on-start", action=argparse.BooleanOptionalAction, default=None,
                           help="启动时是否下发 Main/Sub 模式")
+    g_radio.add_argument("--preset-freq-pair", action="append", default=None, dest="preset_freq_pairs",
+                          metavar="下行;上行", help="预设频率对，如 435.611000;145.990150；"
+                          "可重复传多组供 GUI 切换，传了就用第 1 组作为 downlink/uplink 标称频率")
 
     g_track = p.add_argument_group("跟踪 [tracking]")
     g_track.add_argument("--interval", type=float, default=None, dest="interval_s", help="校正周期（秒）")
@@ -74,6 +77,10 @@ def _load_config(args: argparse.Namespace) -> AppConfig:
     overrides = {k: v for k, v in vars(args).items() if k in overridable and v is not None}
     if overrides:
         cfg = cfg.override(**overrides)
+    if getattr(args, "preset_freq_pairs", None):
+        # 命令行显式传了预设频率对：第 1 组直接作为本次运行的下行/上行标称频率。
+        dl, ul = cfg.radio.presets()[0]
+        cfg = cfg.override(downlink_mhz=dl, uplink_mhz=ul)
     cfg.station.geodetic()  # 提前触发台站位置校验，给出清晰的错误信息
     return cfg
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 from .maidenhead import GridError, grid_to_latlon
@@ -70,12 +70,15 @@ class RadioConfig:
     # IC-9700 卫星模式：Main 对应哪条链路（另一侧自动为 Sub）。
     # flrig 中 VFO A = Main，VFO B = Sub。
     main_band: str = "downlink"
+    # 预设频率对："下行;上行"（MHz），如 "435.611000;145.990150"；可配多组，供 GUI 切换。
+    preset_freq_pairs: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.main_band not in ("downlink", "uplink"):
             raise ConfigError(f"radio.main_band 只能是 downlink/uplink: {self.main_band!r}")
         if self.downlink_mhz <= 0 or self.uplink_mhz <= 0:
             raise ConfigError("radio.downlink_mhz / uplink_mhz 必须为正数")
+        self.presets()  # 提前校验格式，配错立刻报错而不是等 GUI 里点了才发现
 
     @property
     def downlink_hz(self) -> float:
@@ -84,6 +87,25 @@ class RadioConfig:
     @property
     def uplink_hz(self) -> float:
         return self.uplink_mhz * 1e6
+
+    def presets(self) -> list[tuple[float, float]]:
+        """把 preset_freq_pairs 解析成 (下行MHz, 上行MHz) 元组列表。"""
+        result: list[tuple[float, float]] = []
+        for i, raw in enumerate(self.preset_freq_pairs, 1):
+            parts = raw.split(";")
+            if len(parts) != 2:
+                raise ConfigError(
+                    f"radio.preset_freq_pairs[{i}] 格式错误，应为 '下行;上行'"
+                    f"（如 '435.611000;145.990150'）: {raw!r}"
+                )
+            try:
+                dl, ul = float(parts[0]), float(parts[1])
+            except ValueError as exc:
+                raise ConfigError(f"radio.preset_freq_pairs[{i}] 不是合法数字: {raw!r}") from exc
+            if dl <= 0 or ul <= 0:
+                raise ConfigError(f"radio.preset_freq_pairs[{i}] 频率必须为正数: {raw!r}")
+            result.append((dl, ul))
+        return result
 
 
 @dataclass

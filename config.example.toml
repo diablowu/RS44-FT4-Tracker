@@ -35,6 +35,9 @@ set_mode_on_start = true    # 启动时把两个波段设到上面的模式
 # IC-9700 卫星模式约定 Main=下行、Sub=上行（flrig 里 VFO A=Main, VFO B=Sub）。
 # 如果你的接法相反（Main=上行），改为 "uplink"。
 main_band = "downlink"
+# 预设频率对，格式 "下行;上行"（MHz），可配多组；gui 窗口里会显示成一排按钮，
+# 点击即可切换 downlink_mhz/uplink_mhz。命令行等价参数：--preset-freq-pair（可重复传）。
+# preset_freq_pairs = ["435.611000;145.990150", "435.610000;145.991000"]
 
 [tracking]
 interval_s = 1.0            # 校正周期（秒）。越小越平滑，CI-V 流量越大

@@ -95,3 +95,30 @@ def test_override_unknown_field_raises():
 def test_override_reruns_radio_validation():
     with pytest.raises(ConfigError):
         AppConfig.load(None).override(main_band="middle")
+
+
+def test_preset_freq_pairs_parsed(tmp_path):
+    path = _write(
+        tmp_path,
+        "[station]\nlocator = 'OM00aw'\n"
+        "[radio]\npreset_freq_pairs = ['435.611000;145.990150', '435.610000;145.991000']\n",
+    )
+    cfg = AppConfig.load(path)
+    assert cfg.radio.presets() == [(435.611, 145.99015), (435.610, 145.991)]
+
+
+def test_preset_freq_pairs_bad_format_raises(tmp_path):
+    path = _write(tmp_path, "[radio]\npreset_freq_pairs = ['not-a-pair']\n")
+    with pytest.raises(ConfigError, match="格式错误"):
+        AppConfig.load(path)
+
+
+def test_preset_freq_pairs_non_numeric_raises(tmp_path):
+    path = _write(tmp_path, "[radio]\npreset_freq_pairs = ['abc;def']\n")
+    with pytest.raises(ConfigError, match="不是合法数字"):
+        AppConfig.load(path)
+
+
+def test_preset_freq_pairs_via_override():
+    cfg = AppConfig.load(None).override(preset_freq_pairs=["435.611000;145.990150"])
+    assert cfg.radio.presets() == [(435.611, 145.99015)]

@@ -3,6 +3,9 @@
 正北在画布正上方，方位角顺时针增大；圆心=天顶(El 90°)，最外圈=地平线(El 0°)，
 中间两圈分别是 El 60°/30°。卫星入境（进入过境窗口）后把整段过境的方位角/高度角
 轨迹画成一条曲线，并用一个跟随刷新的圆点标出卫星当前位置。
+
+若配置了 radio.preset_freq_pairs（"下行;上行" 频率对，可配多组），窗口里会显示一排
+预设按钮；点击某个预设会把 downlink/uplink 标称频率切换过去，并在底部状态栏提示。
 """
 
 from __future__ import annotations
@@ -26,6 +29,10 @@ _MARKER_OUTLINE = "#5a0f0f"
 _ZENITH = "#4a6478"
 _LABEL_FG = "#33475b"
 _VALUE_FG = "#0c1620"
+_PRESET_BG = "#ffffff"
+_PRESET_BG_ACTIVE = "#cfe0f0"
+_PRESET_FG = "#0c1620"
+_STATUS_FG = "#0a5c2b"
 
 _PAD = 30
 _RINGS = (60.0, 30.0, 0.0)  # 圆心即 El 90°，不用单独画
@@ -109,6 +116,7 @@ _FIELDS = (
     ("sub_f", "Sub 频率"),
     ("state", "状态"),
     ("link", "电台连接"),
+    ("preset", "预设"),
 )
 
 
@@ -121,6 +129,9 @@ class TrackerApp:
         self._track_key: tuple[float, float] | None = None
         self._closed = False
         self._after_id: str | None = None
+        self.presets: list[tuple[float, float]] = controller.cfg.radio.presets()
+        self._active_preset: int | None = self._find_matching_preset()
+        self._preset_buttons: list[tk.Button] = []
 
         self.root = tk.Tk()
         self.root.title(f"RS44 FT4 Tracker — {controller.sat.name}")
@@ -139,6 +150,27 @@ class TrackerApp:
                      font=("TkDefaultFont", 10)).grid(row=row, column=0, sticky="w", pady=2)
             tk.Label(info, textvariable=self.vars[key], background=_BG, foreground=_VALUE_FG,
                      font=("TkDefaultFont", 10, "bold")).grid(row=row, column=1, sticky="w", padx=(6, 0))
+        self._set_preset_label()
+
+        if self.presets:
+            preset_frame = tk.LabelFrame(self.root, text="预设频率", background=_BG,
+                                          foreground=_LABEL_FG, font=("TkDefaultFont", 9))
+            preset_frame.grid(row=1, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 6))
+            for i, (dl, ul) in enumerate(self.presets):
+                btn = tk.Button(
+                    preset_frame, text=f"#{i + 1}  {dl:.6f} / {ul:.6f} MHz",
+                    font=("TkDefaultFont", 9), relief="groove", bd=1,
+                    command=lambda i=i: self._select_preset(i),
+                )
+                btn.pack(side="left", padx=4, pady=4)
+                self._preset_buttons.append(btn)
+            self._refresh_preset_buttons()
+
+        self.status_var = tk.StringVar(value="")
+        tk.Label(self.root, textvariable=self.status_var, background=_BG, foreground=_STATUS_FG,
+                 font=("TkDefaultFont", 9), anchor="w").grid(
+            row=2, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 8)
+        )
 
     # ------------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -202,6 +234,43 @@ class TrackerApp:
             v["link"].set("离线，重试中")
         else:
             v["link"].set(f"已连接 {self.ctl.cfg.flrig.host}:{self.ctl.cfg.flrig.port}")
+
+    # ------------------------------------------------------------------ 预设频率
+    def _find_matching_preset(self) -> int | None:
+        dl, ul = self.ctl.cfg.radio.downlink_mhz, self.ctl.cfg.radio.uplink_mhz
+        for i, (pdl, pul) in enumerate(self.presets):
+            if abs(pdl - dl) < 1e-6 and abs(pul - ul) < 1e-6:
+                return i
+        return None
+
+    def _set_preset_label(self) -> None:
+        if self._active_preset is None:
+            self.vars["preset"].set("自定义" if self.presets else "—")
+            return
+        dl, ul = self.presets[self._active_preset]
+        self.vars["preset"].set(f"#{self._active_preset + 1}  {dl:.6f}/{ul:.6f} MHz")
+
+    def _refresh_preset_buttons(self) -> None:
+        for i, btn in enumerate(self._preset_buttons):
+            active = i == self._active_preset
+            btn.configure(background=_PRESET_BG_ACTIVE if active else _PRESET_BG, foreground=_PRESET_FG)
+
+    def _select_preset(self, i: int) -> None:
+        dl, ul = self.presets[i]
+        self.ctl.cfg.radio.downlink_mhz = dl
+        self.ctl.cfg.radio.uplink_mhz = ul
+        self._active_preset = i
+        self._set_preset_label()
+        self._refresh_preset_buttons()
+        self._set_status(f"[预设] 已切换到 #{i + 1}：下行 {dl:.6f} MHz / 上行 {ul:.6f} MHz")
+        # 立即重算一次以便马上反馈新频率，避免和已排期的刷新重叠成两条并行的定时链
+        if self._after_id is not None:
+            self.root.after_cancel(self._after_id)
+            self._after_id = None
+        self._refresh()
+
+    def _set_status(self, msg: str) -> None:
+        self.status_var.set(msg)
 
     def _on_close(self) -> None:
         self._closed = True

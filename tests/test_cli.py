@@ -93,3 +93,44 @@ def test_cli_boolean_flag_overrides_tracking(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     # 上行不校正：Sub 调谐频率应与标称频率完全一致，偏移为 0
     assert "Sub 调谐 145.993000 MHz (Δ+0 Hz)" in out
+
+
+def test_cli_preset_freq_pair_uses_first_group(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    tle = _write_tle(tmp_path)
+    rc = main([
+        "run", "--dry-run", "--once",
+        "--latitude", "30", "--longitude", "100", "--tle-file", tle,
+        "--preset-freq-pair", "435.611000;145.990150",
+        "--preset-freq-pair", "435.610000;145.991000",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "435.611000 MHz" in out
+    assert "145.990150 MHz" in out
+
+
+def test_cli_preset_freq_pair_bad_format_reports_config_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    tle = _write_tle(tmp_path)
+    rc = main([
+        "run", "--dry-run", "--once",
+        "--latitude", "30", "--longitude", "100", "--tle-file", tle,
+        "--preset-freq-pair", "not-a-pair",
+    ])
+    assert rc == 2
+    assert "配置错误" in capsys.readouterr().out
+
+
+def test_cli_without_preset_flag_keeps_config_freq(tmp_path, capsys):
+    tle = _write_tle(tmp_path)
+    cfg_path = _write_config(
+        tmp_path,
+        "[station]\nlatitude = 30.0\nlongitude = 100.0\n"
+        "[radio]\ndownlink_mhz = 437.5\n"
+        "preset_freq_pairs = ['435.611000;145.990150']\n",
+    )
+    rc = main(["run", "-c", cfg_path, "--dry-run", "--once", "--tle-file", tle])
+    assert rc == 0
+    # 没在命令行传 --preset-freq-pair：即使配置文件里有预设列表，也不强制切换标称频率
+    assert "437.500000 MHz" in capsys.readouterr().out
