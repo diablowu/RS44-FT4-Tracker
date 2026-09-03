@@ -21,7 +21,7 @@ cd "$SCRIPT_DIR"
 DEFAULT_ARGS=(
     --locator OM89fv
     --flrig-host 127.0.0.1
-    --flrig-port 12345
+    --flrig-port 12346
     --flrig-timeout 5.0
     --sat-name "RS-44"
     --norad-id 44909
