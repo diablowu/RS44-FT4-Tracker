@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 import math
+import time
 import tkinter as tk
 from tkinter import messagebox
 
 from .doppler import PassWindow, azel_track, current_or_next_pass, to_local
 from .flrig import FlrigError
-from .tracker import Correction, DopplerController
+from .tracker import Correction, DopplerController, _fmt_secs
 
 _BG = "#f5f7f9"
 _GRID = "#8fa3b3"
@@ -115,6 +116,7 @@ _FIELDS = (
     ("main_f", "Main 频率"),
     ("sub_f", "Sub 频率"),
     ("state", "状态"),
+    ("aos", "下次入境"),
     ("link", "电台连接"),
     ("preset", "预设"),
 )
@@ -192,17 +194,17 @@ class TrackerApp:
         if self.ctl.rig is not None:
             self.ctl._apply(corr)
 
-        self._update_labels(corr)
+        p: PassWindow | None = current_or_next_pass(
+            self.ctl.sat, self.ctl.station, self.ctl.sat.now(), self.ctl.cfg.tracking.min_elevation_deg
+        )
+        self._update_labels(corr, p)
         self.polar.set_marker(corr.geo.az_deg, corr.geo.alt_deg)
-        self._update_track()
+        self._update_track(p)
 
         delay_ms = int(max(0.2, self.ctl.cfg.tracking.interval_s) * 1000)
         self._after_id = self.root.after(delay_ms, self._refresh)
 
-    def _update_track(self) -> None:
-        p: PassWindow | None = current_or_next_pass(
-            self.ctl.sat, self.ctl.station, self.ctl.sat.now(), self.ctl.cfg.tracking.min_elevation_deg
-        )
+    def _update_track(self, p: PassWindow | None) -> None:
         if p is None:
             if self._track_key is not None:
                 self._track_key = None
@@ -214,7 +216,7 @@ class TrackerApp:
             track = azel_track(self.ctl.sat, self.ctl.station, p.aos, p.los)
             self.polar.set_track(track)
 
-    def _update_labels(self, corr: Correction) -> None:
+    def _update_labels(self, corr: Correction, p: PassWindow | None) -> None:
         local_dt, tz = to_local(self.ctl.sat.now().utc_datetime())
         dl_shift, ul_shift = corr.shifts(self.ctl.cfg.radio.downlink_hz, self.ctl.cfg.radio.uplink_hz)
         v = self.vars
@@ -228,12 +230,27 @@ class TrackerApp:
         v["main_f"].set(f"{corr.downlink_hz / 1e6:.6f} MHz")
         v["sub_f"].set(f"{corr.uplink_hz / 1e6:.6f} MHz")
         v["state"].set("过境中" if corr.in_pass else "地平线下")
+        v["aos"].set(self._fmt_aos(corr, p))
         if self.ctl.rig is None:
             v["link"].set("DRY-RUN（未连接）")
         elif self.ctl._link_down:
             v["link"].set("离线，重试中")
         else:
             v["link"].set(f"已连接 {self.ctl.cfg.flrig.host}:{self.ctl.cfg.flrig.port}")
+
+    @staticmethod
+    def _fmt_aos(corr: Correction, p: PassWindow | None) -> str:
+        """过境中显示到 LOS 的倒计时，否则显示到下次 AOS 的倒计时。"""
+        if p is None:
+            return "12 小时内无过境"
+        now = time.time()
+        if corr.in_pass:
+            los_local, _ = to_local(p.los.utc_datetime())
+            remain = p.los.utc_datetime().timestamp() - now
+            return f"LOS {los_local:%H:%M:%S}（剩余 {_fmt_secs(remain)}）"
+        aos_local, _ = to_local(p.aos.utc_datetime())
+        remain = p.aos.utc_datetime().timestamp() - now
+        return f"AOS {aos_local:%m-%d %H:%M:%S}（{_fmt_secs(remain)} 后，峰值 {p.peak_el_deg:.0f}°）"
 
     # ------------------------------------------------------------------ 预设频率
     def _find_matching_preset(self) -> int | None:
