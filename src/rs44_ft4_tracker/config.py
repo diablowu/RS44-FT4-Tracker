@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -108,6 +109,9 @@ class RadioConfig:
         return result
 
 
+MIN_TRACKING_INTERVAL_S = 0.01  # 校正周期下限：10ms
+
+
 @dataclass
 class TrackingConfig:
     interval_s: float = 1.0
@@ -117,8 +121,11 @@ class TrackingConfig:
     correct_uplink: bool = True
 
     def __post_init__(self) -> None:
-        if self.interval_s <= 0:
-            raise ConfigError("tracking.interval_s 必须为正数")
+        if not math.isfinite(self.interval_s) or self.interval_s < MIN_TRACKING_INTERVAL_S:
+            raise ConfigError(
+                f"tracking.interval_s 必须是 ≥ {MIN_TRACKING_INTERVAL_S:g}s 的有限数"
+                f"（10ms 级）: {self.interval_s}"
+            )
         if self.retune_threshold_hz < 0:
             raise ConfigError("tracking.retune_threshold_hz 不能为负数")
 

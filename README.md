@@ -25,6 +25,13 @@ IC-9700 支持 1 Hz 频率步进；默认逐 Hz 校正（`retune_threshold_hz`�
 离线，改为每 10 秒才重试一次，避免每个周期都卡在连接超时上（参考 gpredict 的错误计数
 策略）；重新可达后自动恢复正常节奏。
 
+校正周期由 `tracking.interval_s` 控制，**最小 0.01 秒（10ms）**。循环按单调时钟固定节拍
+（第 n 拍 = 起点 + n×周期），计算和写电台的耗时不会累加到下一个周期；最后 1ms 改为忙等，
+压住 `time.sleep` 的唤醒误差。这样多普勒变化率高时（过境顶点附近约几十 Hz/s），频率修正
+不会因为节拍漂移或周期性"晚到"而滞后。终端 `run` 和 GUI 的后台校正线程使用同一套节拍；
+GUI 的界面刷新仍是 ≥200ms 一次，且过境窗口会缓存到 LOS 之后再重算，界面重绘不会拖慢
+10ms 级的校正。
+
 ## 安装
 
 需要 [uv](https://docs.astral.sh/uv/)：
@@ -75,6 +82,9 @@ uv run rs44-tracker run --dry-run
 
 # 临时用 0.5 s 周期跟踪
 uv run rs44-tracker run --interval 0.5
+
+# 10ms 周期跟踪（interval_s 最小 0.01）
+uv run rs44-tracker run --interval 0.01
 
 # 指定其他配置文件
 uv run rs44-tracker run -c /path/to/config.toml
@@ -134,7 +144,9 @@ uv run rs44-tracker gui --dry-run    # 不连接电台，仅显示
   Main/Sub 调谐频率、过境状态、下次入境倒计时（过境中则显示到 LOS 的倒计时）、
   电台连接状态、当前预设。
 
-关闭窗口即结束跟踪；命令行参数解析、退避重连等逻辑与 `run` 完全一致。
+关闭窗口即结束跟踪；命令行参数解析、退避重连等逻辑与 `run` 完全一致。频率校正由后台
+线程按 `tracking.interval_s`（最小 10ms）执行，界面线程只读取最新结果并按 ≥200ms 的节奏
+重绘极坐标图和数值面板，因此即使把周期调到 10ms，窗口也不会卡顿。
 
 ### 预设频率
 

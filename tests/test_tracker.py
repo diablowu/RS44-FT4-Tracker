@@ -1,7 +1,9 @@
 """DopplerController 行为测试：地平线下也校正、状态行常显多普勒偏移、写入精确到 Hz。"""
 
+import time
 from types import SimpleNamespace
 
+import pytest
 from skyfield.api import load
 
 from rs44_ft4_tracker.config import (
@@ -14,7 +16,15 @@ from rs44_ft4_tracker.config import (
 )
 from rs44_ft4_tracker.doppler import Geometry
 from rs44_ft4_tracker.flrig import FlrigError
-from rs44_ft4_tracker.tracker import BACKOFF_INTERVAL_S, MAX_CONSECUTIVE_ERRORS, Correction, DopplerController
+from rs44_ft4_tracker.tracker import (
+    BACKOFF_INTERVAL_S,
+    MAX_CONSECUTIVE_ERRORS,
+    Correction,
+    DopplerController,
+    Ticker,
+    TrackingWorker,
+    sleep_until,
+)
 
 
 class FakeRig:
@@ -144,3 +154,144 @@ def test_compute_rounds_to_integer_hz():
     assert isinstance(corr.downlink_hz, int)
     assert isinstance(corr.uplink_hz, int)
     assert corr.downlink_hz != ctl.cfg.radio.downlink_hz  # 确实按多普勒做了偏移
+
+
+# ---------------------------------------------------------------- 10ms 定时
+
+class FakeClock:
+    """可手动推进的单调时钟，用来验证节拍数学而不依赖真实时间。"""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_ticker_keeps_phase_when_tick_is_short():
+    clock = FakeClock()
+    ticker = Ticker(0.01, clock=clock)
+    assert ticker.deadline() == pytest.approx(0.0)
+    clock.t = 0.003  # 本拍计算+写电台用了 3ms
+    assert ticker.advance() == pytest.approx(0.007)
+    assert ticker.deadline() == pytest.approx(0.010)  # 仍然落在固定节拍上
+
+
+def test_ticker_skips_missed_slots_after_overrun():
+    """一次 tick 严重超时（如 flrig 超时）后跳到下个整拍，不能连续补发。"""
+    clock = FakeClock()
+    ticker = Ticker(0.01, clock=clock)
+    ticker.deadline()
+    clock.t = 0.035  # 错过 0.02/0.03 两个节拍
+    assert ticker.advance() == pytest.approx(0.005)
+    assert ticker.deadline() == pytest.approx(0.040)
+
+
+def test_ticker_reset_schedules_immediately():
+    clock = FakeClock()
+    ticker = Ticker(0.01, clock=clock)
+    ticker.deadline()
+    clock.t = 0.004
+    ticker.advance()
+    clock.t = 0.006
+    ticker.reset()
+    assert ticker.deadline() == pytest.approx(0.006)
+
+
+def test_sleep_until_supports_ten_ms_cadence():
+    """10ms 周期要真的跑到 10ms 级（旧实现的 50ms 下限在这里会明显超时）。"""
+    ticker = Ticker(0.01)
+    start = time.monotonic()
+    lateness = []
+    for _ in range(20):
+        deadline = ticker.deadline()
+        sleep_until(deadline)
+        lateness.append(time.monotonic() - deadline)
+        ticker.advance()
+    elapsed = time.monotonic() - start
+    assert elapsed == pytest.approx(0.2, abs=0.08)
+    assert sum(lateness) / len(lateness) < 0.005
+    assert max(lateness) < 0.05
+
+
+def test_run_uses_ten_ms_interval(monkeypatch):
+    """终端主循环必须真正按 10ms 跑；旧实现 sleep(max(0.05, interval)) 会是 ≥50ms。"""
+    import rs44_ft4_tracker.tracker as tracker_module
+
+    monkeypatch.setattr(tracker_module, "next_passes", lambda *a, **kw: [])
+    ts = load.timescale(builtin=True)
+    ctl = _make_controller(rig=None, interval_s=0.01)
+    ctl.sat = SimpleNamespace(now=ts.now, name="RS-44", sat=SimpleNamespace(epoch=ts.now()))
+    ticks: list[float] = []
+
+    def fake_compute():
+        ticks.append(time.monotonic())
+        if len(ticks) >= 15:
+            raise KeyboardInterrupt
+        return _corr(in_pass=True)
+
+    ctl.compute = fake_compute
+    start = time.monotonic()
+    ctl.run()
+    elapsed = time.monotonic() - start
+
+    assert len(ticks) == 15
+    assert elapsed < 0.5  # 14 个 10ms 周期；50ms 下限时至少 0.7s
+    gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+    assert sum(gaps) / len(gaps) < 0.02
+
+
+def test_tracking_worker_ticks_at_ten_ms():
+    """GUI 用的后台校正线程也要按 10ms 节拍跑（不依赖 Tk 定时器）。"""
+    ctl = _make_controller(rig=None, interval_s=0.01)
+    stamps: list[float] = []
+
+    def fake_compute():
+        stamps.append(time.monotonic())
+        return _corr(in_pass=False)
+
+    ctl.compute = fake_compute
+    worker = TrackingWorker(ctl)
+    worker.start()
+    try:
+        time.sleep(0.3)
+    finally:
+        worker.stop()
+
+    assert worker.latest is not None
+    assert len(stamps) >= 15  # 0.3s / 10ms = 30 拍，留出调度余量
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert sum(gaps) / len(gaps) < 0.02
+
+
+def test_tracking_worker_poke_runs_immediately():
+    ctl = _make_controller(rig=None, interval_s=5.0)
+    stamps: list[float] = []
+
+    def fake_compute():
+        stamps.append(time.monotonic())
+        return _corr(in_pass=False)
+
+    ctl.compute = fake_compute
+    worker = TrackingWorker(ctl)
+    worker.start()  # 第一拍同步完成
+    assert len(stamps) == 1
+
+    start = time.monotonic()
+    worker.poke()  # 不必等 5 秒
+    try:
+        while len(stamps) < 2 and time.monotonic() - start < 1.0:
+            time.sleep(0.005)
+    finally:
+        worker.stop()
+
+    assert len(stamps) == 2
+    assert time.monotonic() - start < 1.0
+
+
+def test_tracking_worker_set_nominal_updates_config():
+    ctl = _make_controller(rig=None, interval_s=5.0)
+    worker = TrackingWorker(ctl)
+    worker.set_nominal(435.5, 145.5)
+    assert ctl.cfg.radio.downlink_mhz == pytest.approx(435.5)
+    assert ctl.cfg.radio.uplink_mhz == pytest.approx(145.5)

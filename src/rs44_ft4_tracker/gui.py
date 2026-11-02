@@ -4,6 +4,10 @@
 中间两圈分别是 El 60°/30°。卫星入境（进入过境窗口）后把整段过境的方位角/高度角
 轨迹画成一条曲线，并用一个跟随刷新的圆点标出卫星当前位置。
 
+频率校正由后台线程按配置周期（最小 10ms）执行，界面线程只读最新结果并刷新画面；
+界面本身仍按 ≥200ms 的节奏重绘，过境窗口也做了缓存，避免一次上百毫秒的过境预测
+拖慢校正节拍。
+
 若配置了 radio.preset_freq_pairs（"下行;上行" 频率对，可配多组），窗口里会显示一排
 预设按钮；点击某个预设会把 downlink/uplink 标称频率切换过去，并在底部状态栏提示。
 """
@@ -17,7 +21,7 @@ from tkinter import messagebox
 
 from .doppler import PassWindow, azel_track, current_or_next_pass, to_local
 from .flrig import FlrigError
-from .tracker import Correction, DopplerController, _fmt_secs
+from .tracker import Correction, DopplerController, TrackingWorker, _fmt_secs
 
 _BG = "#f5f7f9"
 _GRID = "#8fa3b3"
@@ -37,6 +41,9 @@ _STATUS_FG = "#0a5c2b"
 
 _PAD = 30
 _RINGS = (60.0, 30.0, 0.0)  # 圆心即 El 90°，不用单独画
+_PASS_RECHECK_S = 60.0      # 查不到过境时，隔这么久再扫一次（而不是每帧都扫）
+_STARTUP_RETRY_MS = 20      # 后台线程还没产出第一拍时，稍后重试刷新
+_PRESET_REFRESH_MS = 50     # 切换预设后，等后台按新频率算好一拍再刷新显示
 
 
 class PolarView(tk.Canvas):
@@ -128,7 +135,10 @@ class TrackerApp:
     def __init__(self, controller: DopplerController, dry_run: bool = False) -> None:
         self.ctl = controller
         self.dry_run = dry_run
+        self._worker = TrackingWorker(controller)
         self._track_key: tuple[float, float] | None = None
+        self._pass: PassWindow | None = None
+        self._pass_checked_at = 0.0
         self._closed = False
         self._after_id: str | None = None
         self.presets: list[tuple[float, float]] = controller.cfg.radio.presets()
@@ -183,26 +193,46 @@ class TrackerApp:
                 messagebox.showerror("flrig 连接失败", str(exc))
                 self.root.destroy()
                 return
+        self._worker.start()
         self._refresh()
         self.root.mainloop()
 
     # ------------------------------------------------------------------ 刷新
     def _refresh(self) -> None:
+        """界面刷新（≥200ms 一次）：只读后台线程的最新校正结果，不在这里做 flrig 调用。"""
         if self._closed:
             return
-        corr = self.ctl.compute()
-        if self.ctl.rig is not None:
-            self.ctl._apply(corr)
+        corr = self._worker.latest
+        if corr is None:
+            # 后台线程还没产出第一拍（或刚启动），稍后再试，避免首帧显示空值
+            self._after_id = self.root.after(_STARTUP_RETRY_MS, self._refresh)
+            return
 
-        p: PassWindow | None = current_or_next_pass(
-            self.ctl.sat, self.ctl.station, self.ctl.sat.now(), self.ctl.cfg.tracking.min_elevation_deg
-        )
+        p = self._pass_window()
         self._update_labels(corr, p)
         self.polar.set_marker(corr.geo.az_deg, corr.geo.alt_deg)
         self._update_track(p)
 
         delay_ms = int(max(0.2, self.ctl.cfg.tracking.interval_s) * 1000)
         self._after_id = self.root.after(delay_ms, self._refresh)
+
+    def _pass_window(self) -> PassWindow | None:
+        """缓存当前/下一次过境窗口。
+
+        一次 current_or_next_pass() 要扫 12 小时（约 0.1s），不能每个界面刷新都重算，
+        否则会占满界面线程、也会拖慢校正节拍；窗口只需在 LOS 过去后重算。
+        """
+        now = time.time()
+        p = self._pass
+        if p is not None and p.los.utc_datetime().timestamp() >= now:
+            return p
+        if p is None and now - self._pass_checked_at < _PASS_RECHECK_S:
+            return None
+        self._pass_checked_at = now
+        self._pass = current_or_next_pass(
+            self.ctl.sat, self.ctl.station, self.ctl.sat.now(), self.ctl.cfg.tracking.min_elevation_deg
+        )
+        return self._pass
 
     def _update_track(self, p: PassWindow | None) -> None:
         if p is None:
@@ -274,17 +304,16 @@ class TrackerApp:
 
     def _select_preset(self, i: int) -> None:
         dl, ul = self.presets[i]
-        self.ctl.cfg.radio.downlink_mhz = dl
-        self.ctl.cfg.radio.uplink_mhz = ul
+        self._worker.set_nominal(dl, ul)
         self._active_preset = i
         self._set_preset_label()
         self._refresh_preset_buttons()
         self._set_status(f"[预设] 已切换到 #{i + 1}：下行 {dl:.6f} MHz / 上行 {ul:.6f} MHz")
-        # 立即重算一次以便马上反馈新频率，避免和已排期的刷新重叠成两条并行的定时链
+        # 让后台校正线程立刻按新频率算一拍；稍后刷新显示，避免和已排期的刷新叠成两条链
+        self._worker.poke()
         if self._after_id is not None:
             self.root.after_cancel(self._after_id)
-            self._after_id = None
-        self._refresh()
+        self._after_id = self.root.after(_PRESET_REFRESH_MS, self._refresh)
 
     def _set_status(self, msg: str) -> None:
         self.status_var.set(msg)
@@ -294,6 +323,7 @@ class TrackerApp:
         if self._after_id is not None:
             self.root.after_cancel(self._after_id)
             self._after_id = None
+        self._worker.stop(timeout=0.2)
         self.root.destroy()
 
 

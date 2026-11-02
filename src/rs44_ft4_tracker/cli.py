@@ -49,7 +49,8 @@ def _add_config_args(p: argparse.ArgumentParser) -> None:
                           "可重复传多组供 GUI 切换，传了就用第 1 组作为 downlink/uplink 标称频率")
 
     g_track = p.add_argument_group("跟踪 [tracking]")
-    g_track.add_argument("--interval", type=float, default=None, dest="interval_s", help="校正周期（秒）")
+    g_track.add_argument("--interval", type=float, default=None, dest="interval_s",
+                          help="校正周期（秒，最小 0.01=10ms）")
     g_track.add_argument("--min-elevation", type=float, default=None, dest="min_elevation_deg",
                           help="过境判定的最低高度角（度）")
     g_track.add_argument("--retune-threshold", type=float, default=None, dest="retune_threshold_hz",
