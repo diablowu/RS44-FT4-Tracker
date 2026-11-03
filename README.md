@@ -41,6 +41,35 @@ cd rs44-ft4-tracker
 uv sync            # 创建虚拟环境并安装依赖（skyfield 等）
 ```
 
+## 构建单一可执行文件
+
+如果目标机器不方便安装 Python/uv，可以把程序打包成一个可执行文件。在仓库根目录运行
+对应系统的构建脚本即可（脚本会自动安装 PyInstaller 并调用它）：
+
+```bash
+./build.sh          # Linux/macOS → dist/rs44-tracker
+```
+
+```powershell
+.\build.ps1         # Windows → dist\rs44-tracker.exe
+```
+
+- **不能交叉编译**：在哪个系统上构建，就得到哪个系统的产物。需要 Linux 和 Windows
+  两个版本时，分别在各自系统上运行一次对应脚本。
+- 产物是单文件，包含 skyfield 的星历/时间数据、numpy、sgp4 和 tkinter；目标机器无需
+  再安装 Python 或这些依赖。首次启动会先把依赖解压到临时目录，因此比 `uv run` 略慢。
+- 运行时仍从**当前工作目录**读取 `config.toml`（与 `uv run rs44-tracker` 相同）。
+  把 `config.toml` 放在可执行文件旁边，并在该目录下运行：
+
+```bash
+./dist/rs44-tracker gui          # 图形界面
+./dist/rs44-tracker passes       # 列出未来过境
+./dist/rs44-tracker run --dry-run --once
+```
+
+在 Windows 上直接双击 `rs44-tracker.exe` 等价于不带参数运行 `run`（会立即开始终端
+跟踪）；建议在命令行里带 `gui` 或 `passes` 运行，以便看到输出。
+
 ## 电台与 flrig 准备
 
 1. IC-9700 开启**卫星模式**（SAT），Main=70cm 下行、Sub=2m 上行（默认约定，可在配置翻转）；
