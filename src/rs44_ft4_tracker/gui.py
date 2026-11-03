@@ -19,7 +19,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox
 
-from .doppler import PassWindow, azel_track, current_or_next_pass, to_local
+from .doppler import PassWindow, azel_track, current_or_next_pass, next_passes, to_local
 from .flrig import FlrigError
 from .tracker import Correction, DopplerController, TrackingWorker, _fmt_secs
 
@@ -42,6 +42,8 @@ _STATUS_FG = "#0a5c2b"
 _PAD = 30
 _RINGS = (60.0, 30.0, 0.0)  # 圆心即 El 90°，不用单独画
 _PASS_RECHECK_S = 60.0      # 查不到过境时，隔这么久再扫一次（而不是每帧都扫）
+_FORECAST_HOURS = 12.0      # 未来过境预测表扫描的范围
+_FORECAST_ROWS = 4          # 预测表最多显示几条过境
 _STARTUP_RETRY_MS = 20      # 后台线程还没产出第一拍时，稍后重试刷新
 _PRESET_REFRESH_MS = 50     # 切换预设后，等后台按新频率算好一拍再刷新显示
 
@@ -139,6 +141,8 @@ class TrackerApp:
         self._track_key: tuple[float, float] | None = None
         self._pass: PassWindow | None = None
         self._pass_checked_at = 0.0
+        self._future: list[PassWindow] | None = None
+        self._future_checked_at = 0.0
         self._closed = False
         self._after_id: str | None = None
         self.presets: list[tuple[float, float]] = controller.cfg.radio.presets()
@@ -163,6 +167,7 @@ class TrackerApp:
             tk.Label(info, textvariable=self.vars[key], background=_BG, foreground=_VALUE_FG,
                      font=("TkDefaultFont", 10, "bold")).grid(row=row, column=1, sticky="w", padx=(6, 0))
         self._set_preset_label()
+        self._build_forecast_panel(info)
 
         if self.presets:
             preset_frame = tk.LabelFrame(self.root, text="预设频率", background=_BG,
@@ -183,6 +188,37 @@ class TrackerApp:
                  font=("TkDefaultFont", 9), anchor="w").grid(
             row=2, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 8)
         )
+
+    # ------------------------------------------------------------------ 未来过境预测
+    def _build_forecast_panel(self, parent: tk.Misc) -> None:
+        """在当前过境数据下方建一张未来过境表（AOS/LOS、起落方位角、最大仰角）。"""
+        frame = tk.LabelFrame(
+            parent, text=f"未来过境预测（{_FORECAST_HOURS:g} 小时内）",
+            background=_BG, foreground=_LABEL_FG, font=("TkDefaultFont", 9),
+        )
+        frame.grid(row=len(_FIELDS), column=0, columnspan=2, sticky="we", pady=(10, 0))
+        headers = ("AOS（开始）", "LOS（结束）", "起始方位", "结束方位", "最大仰角")
+        for col, text in enumerate(headers):
+            tk.Label(frame, text=text, background=_BG, foreground=_LABEL_FG,
+                     font=("TkDefaultFont", 10)).grid(
+                row=0, column=col, sticky="w", padx=(6, 4), pady=(2, 1)
+            )
+        self._forecast_vars: list[list[tk.StringVar]] = []
+        self._forecast_labels: list[list[tk.Label]] = []
+        for r in range(_FORECAST_ROWS):
+            row_vars: list[tk.StringVar] = []
+            row_labels: list[tk.Label] = []
+            for c in range(5):
+                var = tk.StringVar(value="")
+                label = tk.Label(
+                    frame, textvariable=var, background=_BG, foreground=_VALUE_FG,
+                    font=("TkDefaultFont", 10, "bold"), width=14 if c < 2 else 6,
+                )
+                label.grid(row=r + 1, column=c, sticky="w", padx=(6, 4), pady=0)
+                row_vars.append(var)
+                row_labels.append(label)
+            self._forecast_vars.append(row_vars)
+            self._forecast_labels.append(row_labels)
 
     # ------------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -210,6 +246,7 @@ class TrackerApp:
 
         p = self._pass_window()
         self._update_labels(corr, p)
+        self._update_forecast()
         self.polar.set_marker(corr.geo.az_deg, corr.geo.alt_deg)
         self._update_track(p)
 
@@ -233,6 +270,62 @@ class TrackerApp:
             self.ctl.sat, self.ctl.station, self.ctl.sat.now(), self.ctl.cfg.tracking.min_elevation_deg
         )
         return self._pass
+
+    def _future_passes(self) -> list[PassWindow]:
+        """缓存未来过境预测。
+
+        扫描一次约 0.1s，不能每帧都做：结果缓存到第一条过境开始（或 60s 后）再重算。
+        正在进行的过境不算“未来”，直接从列表里滤掉。
+        """
+        now = time.time()
+        if self._future is not None:
+            fresh = now - self._future_checked_at < _PASS_RECHECK_S
+            first_started = bool(self._future) and (
+                self._future[0].aos.utc_datetime().timestamp() <= now
+            )
+            if fresh and not first_started:
+                return self._future
+        self._future_checked_at = now
+        t = self.ctl.sat.now()
+        now_epoch = t.utc_datetime().timestamp()
+        windows = next_passes(
+            self.ctl.sat, self.ctl.station, t,
+            hours=_FORECAST_HOURS,
+            min_elevation_deg=self.ctl.cfg.tracking.min_elevation_deg,
+            max_count=_FORECAST_ROWS + 1,
+        )
+        self._future = [
+            p for p in windows if p.aos.utc_datetime().timestamp() > now_epoch
+        ][:_FORECAST_ROWS]
+        return self._future
+
+    def _update_forecast(self) -> None:
+        passes = self._future_passes()
+        for i, (row_vars, row_labels) in enumerate(
+            zip(self._forecast_vars, self._forecast_labels)
+        ):
+            if i < len(passes):
+                p = passes[i]
+                aos_local, _ = to_local(p.aos.utc_datetime())
+                los_local, _ = to_local(p.los.utc_datetime())
+                row_vars[0].set(f"{aos_local:%m-%d %H:%M:%S}")
+                row_vars[1].set(f"{los_local:%m-%d %H:%M:%S}")
+                row_vars[2].set(f"{p.aos_az_deg:.1f}°")
+                row_vars[3].set(f"{p.los_az_deg:.1f}°")
+                row_vars[4].set(f"{p.peak_el_deg:.1f}°")
+                row_labels[0].grid(columnspan=1)
+                for label in row_labels[1:]:
+                    label.grid()
+            elif i == 0:
+                row_vars[0].set(f"{_FORECAST_HOURS:g} 小时内无过境")
+                for var in row_vars[1:]:
+                    var.set("")
+                row_labels[0].grid(columnspan=5)
+                for label in row_labels[1:]:
+                    label.grid_remove()
+            else:
+                for label in row_labels:
+                    label.grid_remove()
 
     def _update_track(self, p: PassWindow | None) -> None:
         if p is None:
