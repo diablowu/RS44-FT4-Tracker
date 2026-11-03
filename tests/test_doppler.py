@@ -120,6 +120,11 @@ def test_next_passes_finds_windows():
         assert p.los.utc_datetime() > p.aos.utc_datetime()
         assert 0.0 <= p.peak_el_deg <= 90.0
         assert p.aos.utc_datetime() >= t0.utc_datetime()
+        # 起落方位角按 AOS/LOS 时刻计算，用于 GUI 的未来过境预测表
+        assert 0.0 <= p.aos_az_deg < 360.0
+        assert 0.0 <= p.los_az_deg < 360.0
+        assert p.aos_az_deg == pytest.approx(geometry(sat.sat, station, p.aos).az_deg, abs=1e-6)
+        assert p.los_az_deg == pytest.approx(geometry(sat.sat, station, p.los).az_deg, abs=1e-6)
     # 时间递增
     aos_list = [p.aos.utc_datetime() for p in passes]
     assert aos_list == sorted(aos_list)

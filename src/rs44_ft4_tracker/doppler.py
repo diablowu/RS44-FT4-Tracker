@@ -195,10 +195,14 @@ def make_station(lat_deg: float, lon_deg: float, alt_m: float = 0.0) -> Geograph
 
 @dataclass(frozen=True)
 class PassWindow:
+    """一次过境窗口；方位角为 AOS/LOS 时刻的方位角（起落方向）。"""
+
     aos: Time
     max_el: Time
     los: Time
     peak_el_deg: float
+    aos_az_deg: float
+    los_az_deg: float
 
 
 def next_passes(
@@ -228,12 +232,12 @@ def next_passes(
                 window = []
             window.append((epoch, el))
         elif window:
-            result.append(_make_window(sat.ts, window, coarse_step_s))
+            result.append(_make_window(sat, station, window, coarse_step_s))
             if len(result) >= max_count:
                 return result
             window = None
     if window:
-        result.append(_make_window(sat.ts, window, coarse_step_s))
+        result.append(_make_window(sat, station, window, coarse_step_s))
     return result
 
 
@@ -282,14 +286,23 @@ def azel_track(
 
 
 def _make_window(
-    ts: Timescale, samples: list[tuple[float, float]], coarse_step_s: float
+    sat: Satellite,
+    station: GeographicPosition,
+    samples: list[tuple[float, float]],
+    coarse_step_s: float,
 ) -> PassWindow:
-    aos_epoch = samples[0][0] - coarse_step_s / 2.0
-    los_epoch = samples[-1][0] + coarse_step_s / 2.0
+    aos_dt = datetime.fromtimestamp(samples[0][0] - coarse_step_s / 2.0, tz=timezone.utc)
+    los_dt = datetime.fromtimestamp(samples[-1][0] + coarse_step_s / 2.0, tz=timezone.utc)
     peak = max(samples, key=lambda s: s[1])
+    # 起落方位角按 AOS/LOS 时刻单独计算：窗口两端最多相差半个粗扫描步长，
+    # 用窗口内第一个/最后一个采样点的方位角会有可见误差。
+    endpoints = sat.ts.utc([aos_dt, los_dt])
+    _alt, az, _distance = (sat.sat - station).at(endpoints).altaz()
     return PassWindow(
-        aos=ts.utc(datetime.fromtimestamp(aos_epoch, tz=timezone.utc)),
-        max_el=ts.utc(datetime.fromtimestamp(peak[0], tz=timezone.utc)),
-        los=ts.utc(datetime.fromtimestamp(los_epoch, tz=timezone.utc)),
+        aos=sat.ts.utc(aos_dt),
+        max_el=sat.ts.utc(datetime.fromtimestamp(peak[0], tz=timezone.utc)),
+        los=sat.ts.utc(los_dt),
         peak_el_deg=peak[1],
+        aos_az_deg=float(az.degrees[0]),
+        los_az_deg=float(az.degrees[1]),
     )
