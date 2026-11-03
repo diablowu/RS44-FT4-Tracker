@@ -189,6 +189,11 @@ class TrackerApp:
             row=2, column=0, columnspan=2, sticky="we", padx=12, pady=(0, 8)
         )
 
+        # 窗口按内容自适应；允许用户拖动改变大小会把右侧信息面板和过境预测表挤乱
+        # （issue #4），所以先算好自然尺寸，再禁止用户 resize。
+        self.root.update_idletasks()
+        self.root.resizable(False, False)
+
     # ------------------------------------------------------------------ 未来过境预测
     def _build_forecast_panel(self, parent: tk.Misc) -> None:
         """在当前过境数据下方建一张未来过境表（AOS/LOS、起落方位角、最大仰角）。"""
