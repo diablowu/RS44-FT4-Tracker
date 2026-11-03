@@ -75,6 +75,21 @@ def test_main_band_mapping():
     assert cfg.tracking.interval_s == 2.0
 
 
+def test_interval_supports_ten_ms():
+    cfg = AppConfig.load(None).override(interval_s=0.01)
+    assert cfg.tracking.interval_s == pytest.approx(0.01)
+
+
+def test_interval_below_ten_ms_rejected():
+    with pytest.raises(ConfigError, match="10ms"):
+        AppConfig.load(None).override(interval_s=0.005)
+
+
+def test_interval_non_finite_rejected():
+    with pytest.raises(ConfigError, match="有限数"):
+        AppConfig.load(None).override(interval_s=float("nan"))
+
+
 def test_override_crosses_multiple_sections():
     cfg = AppConfig.load(None).override(
         latitude=1.0, longitude=2.0, host="10.0.0.1", downlink_mhz=145.9, interval_s=2.0

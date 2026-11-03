@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import __version__
@@ -24,6 +26,63 @@ WARN_INTERVAL_S = 30.0
 NEXT_AOS_RECHECK_S = 600.0
 MAX_CONSECUTIVE_ERRORS = 5   # 参考 gpredict：连续失败达到该次数后放慢重试节奏
 BACKOFF_INTERVAL_S = 10.0    # 电台判定离线后，每隔该秒数才重试一次（而非每周期都等超时）
+SPIN_WAIT_S = 0.001          # sleep_until 最后这一段忙等，压住平台 sleep 的唤醒误差
+
+
+def sleep_until(deadline: float, *, spin_s: float = SPIN_WAIT_S) -> None:
+    """睡到单调时钟 deadline 时刻，最后 spin_s 秒改为忙等。
+
+    10ms 周期下，time.sleep 的 1~2ms 唤醒误差就是 10~20% 的周期误差（Windows 上
+    尤其明显）；先粗睡到只剩 spin_s，再忙等到截止时刻，才谈得上"10ms 级"定时。
+    """
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return
+        if remaining > spin_s:
+            time.sleep(remaining - spin_s)
+        else:
+            while time.monotonic() < deadline:
+                pass
+            return
+
+
+class Ticker:
+    """固定节拍的单调时钟定时器：tick 时刻 = 起点 + n·周期，不把耗时累加到周期里。
+
+    终端主循环和 GUI 的后台校正线程共用这套节拍。某一次 tick 耗时超过周期时
+    （例如 flrig 调用超时），跳过已经错过的整周期再排下一拍，而不是连续补发，
+    避免突然向电台连发一串频率。
+    """
+
+    def __init__(self, interval_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+        if interval_s <= 0:
+            raise ValueError(f"interval_s 必须为正数: {interval_s}")
+        self.interval_s = float(interval_s)
+        self._clock = clock
+        self._deadline: float | None = None
+
+    def reset(self) -> None:
+        """把下一拍安排在调用时刻（预设频率切换后立即重算用）。"""
+        self._deadline = None
+
+    def deadline(self) -> float:
+        """下一拍的目标时刻（单调时钟）；首次调用以当前时刻为起点。"""
+        now = self._clock()
+        if self._deadline is None:
+            self._deadline = now
+        return self._deadline
+
+    def advance(self) -> float:
+        """本拍结束，返回距离下一拍的秒数（按排定时刻算，已扣掉本拍耗时）。"""
+        now = self._clock()
+        if self._deadline is None:
+            self._deadline = now
+        self._deadline += self.interval_s
+        if self._deadline <= now:
+            missed = int((now - self._deadline) // self.interval_s) + 1
+            self._deadline += missed * self.interval_s
+        return max(0.0, self._deadline - now)
 
 
 @dataclass
@@ -200,8 +259,10 @@ class DopplerController:
         self._print_header()
         if self.rig is not None:
             self.startup_radio()
+        ticker = Ticker(self.cfg.tracking.interval_s)
         try:
             while True:
+                sleep_until(ticker.deadline())
                 corr = self.compute()
                 if self._in_pass is not None and corr.in_pass != self._in_pass:
                     local_dt, tz = to_local(self.sat.now().utc_datetime())
@@ -217,7 +278,7 @@ class DopplerController:
                     return
                 self._apply(corr)
                 print(f"\r{self._status_line(corr):<130}", end="", flush=True)
-                time.sleep(max(0.05, self.cfg.tracking.interval_s))
+                ticker.advance()
         except KeyboardInterrupt:
             print("\n[退出] Ctrl-C，电台频率保持当前值")
 
@@ -257,6 +318,80 @@ class DopplerController:
             f" → Sub 调谐 {corr.uplink_hz / 1e6:.6f} MHz (Δ{ul_shift:+.0f} Hz)\n"
             f"状态   {state}"
         )
+
+
+class TrackingWorker:
+    """后台按固定节拍执行 compute() + _apply()，供 GUI 使用。
+
+    Tk 的 after 定时器不适合当 10ms 节拍：界面重绘/过境预测一次可能耗掉几十到
+    上百毫秒，会把校正周期拖长；Windows 上 Tk 定时器的粒度也可能明显大于 10ms。
+    把定时和 flrig 调用放进这个线程后，界面线程只负责显示 latest。
+    """
+
+    def __init__(self, ctl: DopplerController) -> None:
+        self.ctl = ctl
+        self.latest: Correction | None = None
+        self._ticker = Ticker(ctl.cfg.tracking.interval_s)
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._config_lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._last_error: str | None = None
+
+    def start(self) -> None:
+        """同步跑第一拍（GUI 首帧即有数据），再启动后台线程。"""
+        if self._thread is not None:
+            return
+        self.tick()
+        self._ticker.advance()
+        self._thread = threading.Thread(target=self._run, name="rs44-doppler", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def poke(self) -> None:
+        """打断等待、立刻跑一拍（预设频率切换后马上按新频率重算）。"""
+        self._wake.set()
+
+    def set_nominal(self, downlink_mhz: float, uplink_mhz: float) -> None:
+        """原子地切换标称频率对，避免后台线程读到只改了一半的一对频率。"""
+        with self._config_lock:
+            self.ctl.cfg.radio.downlink_mhz = downlink_mhz
+            self.ctl.cfg.radio.uplink_mhz = uplink_mhz
+
+    def tick(self) -> Correction | None:
+        """计算并（有电台时）下发一拍；出错时保留上一拍结果，不让线程静默退出。"""
+        try:
+            with self._config_lock:
+                corr = self.ctl.compute()
+            if self.ctl.rig is not None:
+                self.ctl._apply(corr)
+        except Exception as exc:  # noqa: BLE001 - 后台线程不能因单次异常退出
+            msg = f"{type(exc).__name__}: {exc}"
+            if msg != self._last_error:
+                self._last_error = msg
+                print(f"\n[错误] 频率校正循环异常: {msg}")
+            return None
+        self._last_error = None
+        self.latest = corr
+        return corr
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            remaining = self._ticker.deadline() - time.monotonic()
+            if remaining > 0:
+                self._wake.wait(remaining)
+            if self._wake.is_set():
+                self._wake.clear()
+                self._ticker.reset()
+            if self._stop.is_set():
+                return
+            self.tick()
+            self._ticker.advance()
 
 
 def _fmt_secs(secs: float) -> str:

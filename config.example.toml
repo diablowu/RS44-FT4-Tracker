@@ -40,7 +40,7 @@ main_band = "downlink"
 # preset_freq_pairs = ["435.611000;145.990150", "435.610000;145.991000"]
 
 [tracking]
-interval_s = 1.0            # 校正周期（秒）。越小越平滑，CI-V 流量越大
+interval_s = 1.0            # 校正周期（秒）。最小 0.01（10ms）；越小越平滑，CI-V 流量越大
 min_elevation_deg = 0.0     # 高于该高度角才显示为"过境"状态（仅用于状态行/AOS判定，不影响是否校正）
 retune_threshold_hz = 1.0   # 频率变化达到该值（Hz）才重调；IC-9700 支持 1 Hz 步进，默认逐 Hz 校正
 correct_downlink = true     # 是否校正下行（Main）
